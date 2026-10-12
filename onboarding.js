@@ -6,8 +6,8 @@
  * everything via the electronAPI bridge exposed by preload.js:
  *
  *   1. Welcome
- *   2. Gemini API key entry + live connection test
- *   3. Speech provider choice (Whisper / Azure / Skip)
+ *   2. LLM provider choice (Gemini / OpenRouter) + API key entry
+ *   3. Speech provider choice (Whisper / Azure / OpenRouter / Skip)
  *   4. Whisper detect + (optional) install — only shown when whisper
  *   5. Star-the-repo prompt + summary
  */
@@ -42,11 +42,15 @@
   // ── State ─────────────────────────────────────────────────────────
   const state = {
     step: 0,
+    llmProvider: 'gemini', // 'gemini' | 'openrouter'
     geminiKey: '',
     geminiConfigured: false, // a key already exists in .env from a prior run
-    speechProvider: null, // 'whisper' | 'azure' | 'skip'
+    openrouterKey: '',
+    openrouterConfigured: false,
+    speechProvider: null, // 'whisper' | 'azure' | 'openrouter' | 'skip'
     azureKey: '',
     azureRegion: '',
+    speechOpenrouterKey: '',
     whisperCmd: null,
     whisperDetected: false,
     skippingWhisper: false,
@@ -136,10 +140,16 @@
         return true;
       case 'apikey':
         // A key already in .env is enough — don't force a re-entry.
+        if (state.llmProvider === 'openrouter') {
+          return !!state.openrouterKey.trim() || state.openrouterConfigured;
+        }
         return !!state.geminiKey.trim() || state.geminiConfigured;
       case 'speech':
         if (state.speechProvider === 'azure') {
           return !!state.azureKey.trim() && !!state.azureRegion.trim();
+        }
+        if (state.speechProvider === 'openrouter') {
+          return !!state.speechOpenrouterKey.trim() || !!state.openrouterKey.trim() || state.openrouterConfigured;
         }
         return !!state.speechProvider;
       case 'whisper':
@@ -154,10 +164,14 @@
     }
   }
 
-  // ── Wire up: API key ──────────────────────────────────────────────
+  // ── Wire up: API key / provider ───────────────────────────────────
   const geminiInput = $('#geminiKey');
+  const openrouterInput = $('#openrouterKey');
   const toggleVis = $('#toggleVis');
+  const toggleOrVis = $('#toggleOrVis');
   const keyStatus = $('#keyStatus');
+  const geminiKeyPanel = $('#geminiKeyPanel');
+  const openrouterKeyPanel = $('#openrouterKeyPanel');
 
   function setKeyStatus(state_, text) {
     keyStatus.className = `status-pill ${state_}`;
@@ -176,6 +190,28 @@
     txt.textContent = text;
   }
 
+  function refreshProviderPanels() {
+    const isOpenRouter = state.llmProvider === 'openrouter';
+    if (geminiKeyPanel) geminiKeyPanel.style.display = isOpenRouter ? 'none' : '';
+    if (openrouterKeyPanel) openrouterKeyPanel.style.display = isOpenRouter ? '' : 'none';
+    // Reset the status pill when the provider changes.
+    keyStatus.style.display = 'none';
+  }
+
+  $$('#llmChoices .choice-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      state.llmProvider = card.dataset.value === 'openrouter' ? 'openrouter' : 'gemini';
+      $$('#llmChoices .choice-card').forEach((c) => c.classList.remove('selected'));
+      card.classList.add('selected');
+      refreshProviderPanels();
+      if (state.llmProvider === 'openrouter' && state.openrouterConfigured) {
+        setKeyStatus('success', 'Already configured — click Continue');
+      } else if (state.llmProvider === 'gemini' && state.geminiConfigured) {
+        setKeyStatus('success', 'Already configured — click Continue');
+      }
+    });
+  });
+
   geminiInput.addEventListener('input', () => {
     state.geminiKey = geminiInput.value.trim();
     if (!state.geminiKey) {
@@ -187,6 +223,19 @@
     }
   });
 
+  if (openrouterInput) {
+    openrouterInput.addEventListener('input', () => {
+      state.openrouterKey = openrouterInput.value.trim();
+      if (!state.openrouterKey) {
+        keyStatus.style.display = 'none';
+      } else if (keyStatus.classList.contains('success')) {
+        // keep
+      } else {
+        setKeyStatus('idle', 'Key entered');
+      }
+    });
+  }
+
   toggleVis.addEventListener('click', () => {
     const showing = geminiInput.type === 'text';
     geminiInput.type = showing ? 'password' : 'text';
@@ -194,6 +243,16 @@
       ? '<i class="fas fa-eye"></i>'
       : '<i class="fas fa-eye-slash"></i>';
   });
+
+  if (toggleOrVis && openrouterInput) {
+    toggleOrVis.addEventListener('click', () => {
+      const showing = openrouterInput.type === 'text';
+      openrouterInput.type = showing ? 'password' : 'text';
+      toggleOrVis.innerHTML = showing
+        ? '<i class="fas fa-eye"></i>'
+        : '<i class="fas fa-eye-slash"></i>';
+    });
+  }
 
   // ── Wire up: Speech choices ───────────────────────────────────────
   $$('#speechChoices .choice-card').forEach((card) => {
@@ -204,15 +263,24 @@
       card.classList.add('selected');
       const azurePanel = $('#azurePanel');
       azurePanel.style.display = value === 'azure' ? 'block' : 'none';
+      const orPanel = $('#speechOpenrouterPanel');
+      if (orPanel) orPanel.style.display = value === 'openrouter' ? 'block' : 'none';
       if (value !== 'azure') {
         state.azureKey = '';
         state.azureRegion = '';
+      }
+      if (value !== 'openrouter') {
+        state.speechOpenrouterKey = '';
       }
     });
   });
 
   $('#azureKey').addEventListener('input', (e) => { state.azureKey = e.target.value.trim(); });
   $('#azureRegion').addEventListener('input', (e) => { state.azureRegion = e.target.value.trim(); });
+  const speechOpenrouterInput = $('#speechOpenrouterKey');
+  if (speechOpenrouterInput) {
+    speechOpenrouterInput.addEventListener('input', (e) => { state.speechOpenrouterKey = e.target.value.trim(); });
+  }
 
   // ── Wire up: Whisper screen ───────────────────────────────────────
   const installLog = $('#installLog');
@@ -450,11 +518,20 @@
   // ── Wire up: Finish screen ────────────────────────────────────────
   function populateSummary() {
     const rows = [];
-    rows.push({
-      label: '<i class="fas fa-key"></i> Gemini API',
-      value: (state.geminiKey || state.geminiConfigured) ? 'Configured' : 'Missing',
-      cls: (state.geminiKey || state.geminiConfigured) ? 'ok' : 'skip',
-    });
+    if (state.llmProvider === 'openrouter') {
+      const configured = !!(state.openrouterKey || state.openrouterConfigured);
+      rows.push({
+        label: '<i class="fas fa-network-wired"></i> OpenRouter API',
+        value: configured ? 'Configured' : 'Missing',
+        cls: configured ? 'ok' : 'skip',
+      });
+    } else {
+      rows.push({
+        label: '<i class="fas fa-key"></i> Gemini API',
+        value: (state.geminiKey || state.geminiConfigured) ? 'Configured' : 'Missing',
+        cls: (state.geminiKey || state.geminiConfigured) ? 'ok' : 'skip',
+      });
+    }
     if (state.speechProvider === 'whisper') {
       rows.push({
         label: '<i class="fas fa-microphone"></i> Speech',
@@ -466,6 +543,13 @@
         label: '<i class="fas fa-cloud"></i> Speech',
         value: 'Azure',
         cls: 'ok',
+      });
+    } else if (state.speechProvider === 'openrouter') {
+      const configured = !!(state.speechOpenrouterKey || state.openrouterKey || state.openrouterConfigured);
+      rows.push({
+        label: '<i class="fas fa-network-wired"></i> Speech',
+        value: configured ? 'OpenRouter Whisper' : 'OpenRouter (key missing)',
+        cls: configured ? 'ok' : 'skip',
       });
     } else {
       rows.push({
@@ -514,16 +598,24 @@
     const name = currentScreenName();
     if (!canAdvance()) {
       // Lightly nudge the user
-      if (name === 'apikey') setKeyStatus('error', 'Enter a Gemini API key');
+      if (name === 'apikey') {
+        setKeyStatus('error', state.llmProvider === 'openrouter'
+          ? 'Enter an OpenRouter API key'
+          : 'Enter a Gemini API key');
+      }
       return;
     }
 
-    // Persist settings on speech selection (Azure path), since we
-    // already saved geminiKey on test; do it here too if user skipped
-    // testing.
-    if (name === 'apikey' && state.geminiKey && window.electronAPI) {
+    // Persist provider + key on the API-key step.
+    if (name === 'apikey' && window.electronAPI) {
       try {
-        await window.electronAPI.saveSettings({ geminiKey: state.geminiKey });
+        if (state.llmProvider === 'openrouter') {
+          const payload = { llmProvider: 'openrouter' };
+          if (state.openrouterKey) payload.openrouterKey = state.openrouterKey;
+          await window.electronAPI.saveSettings(payload);
+        } else if (state.geminiKey) {
+          await window.electronAPI.saveSettings({ llmProvider: 'gemini', geminiKey: state.geminiKey });
+        }
       } catch (_) { /* surfaced elsewhere */ }
     }
     if (name === 'speech' && window.electronAPI) {
@@ -535,6 +627,10 @@
         if (state.speechProvider === 'azure') {
           payload.azureKey = state.azureKey;
           payload.azureRegion = state.azureRegion;
+        }
+        if (state.speechProvider === 'openrouter') {
+          const key = state.speechOpenrouterKey || state.openrouterKey;
+          if (key) payload.openrouterKey = key;
         }
         if (state.speechProvider === 'whisper' && state.whisperCmd) {
           payload.whisperCommand = quoteCommandIfNeeded(state.whisperCmd);
@@ -655,17 +751,25 @@
   // ── Boot ──────────────────────────────────────────────────────────
   showScreen('welcome');
 
-  // Pre-populate Gemini key from existing .env (if any) so users with
+  // Pre-populate existing provider keys from .env (if any) so users with
   // a partial config don't have to retype.
   if (window.electronAPI && window.electronAPI.getFirstRunStatus) {
     window.electronAPI.getFirstRunStatus().then((s) => {
-      if (s && s.geminiConfigured) {
-        // We can't read the key back (settings returns empty for keys),
-        // but we can mark status as success if the env file already has one
-        // and let the user advance without retyping it.
+      if (!s) return;
+      // We can't read keys back (settings returns empty for keys), but we can
+      // mark status success if the env file already has one and let the user
+      // advance without retyping it.
+      if (s.openrouterConfigured) {
+        state.openrouterConfigured = true;
+        if (openrouterInput) openrouterInput.placeholder = '•••••••••••••••• (already set)';
+      }
+      if (s.geminiConfigured) {
         state.geminiConfigured = true;
-        setKeyStatus('success', 'Already configured — click Continue');
         geminiInput.placeholder = '•••••••••••••••• (already set)';
+        // Only surface the success pill when Gemini is the active provider.
+        if (state.llmProvider === 'gemini') {
+          setKeyStatus('success', 'Already configured — click Continue');
+        }
       }
     }).catch(() => {});
   }

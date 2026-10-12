@@ -36,7 +36,8 @@ It is free and open source. Processing stays on your machine, and the only thing
 - **Hidden during screen share.** When a share starts, the app can hide every window on its own.
 - **Flexible local voice.** Choose manual start/stop capture or automatic voice-activity detection without fixed-timer sentence cuts.
 - **Configurable streamed answers.** Route voice replies to chat, the floating overlay, or both.
-- **Direct image analysis.** Screenshots go straight to Gemini for visual reasoning, with no slow OCR step in between.
+- **Direct image analysis.** Screenshots go straight to your AI provider for visual reasoning, with no slow OCR step in between.
+- **Bring your own model backend.** Use Google Gemini, or OpenRouter to reach DeepSeek, OpenAI, Anthropic and hundreds more through one key.
 - **Session memory.** The whole conversation is remembered, so follow-ups, edge cases, and optimizations keep their context.
 - **Language aware.** Tailored answers for C++, C, Python, Java, and JavaScript.
 - **Stealthy by design.** Runs under ordinary system names, ships with no telemetry, and keeps your session local.
@@ -100,11 +101,18 @@ If you would rather build from source, three steps are all it takes.
 
 ## Configuration
 
-The setup script writes sensible defaults. The only required value is a Gemini API key.
+The setup script writes sensible defaults. The only required value is an API key for your chosen AI provider (Gemini by default).
 
 ```bash
-# Required
+# Required for the default provider
 GEMINI_API_KEY=your_gemini_api_key_here
+
+# AI provider for answers, screenshots and chat: gemini (default) or openrouter
+LLM_PROVIDER=gemini
+
+# OpenRouter (one key powers answers and speech-to-text)
+# OPENROUTER_API_KEY=your_openrouter_key_here
+# OPENROUTER_MODEL=deepseek/deepseek-v4.1-flash
 
 # Optional speech provider. Pick one.
 SPEECH_PROVIDER=whisper
@@ -112,6 +120,10 @@ SPEECH_PROVIDER=whisper
 # Azure option
 AZURE_SPEECH_KEY=your_azure_speech_key
 AZURE_SPEECH_REGION=your_region
+
+# OpenRouter speech-to-text option (shares OPENROUTER_API_KEY)
+# OPENROUTER_STT_MODEL=openai/whisper-large-v3
+# OPENROUTER_STT_LANGUAGE=auto
 
 # Local Whisper option
 WHISPER_COMMAND=whisper
@@ -130,16 +142,18 @@ Speech is optional. If no provider is configured, the microphone button hides it
 
 ## Optional voice setup
 
-You can use local Whisper for offline transcription or Azure Speech for a cloud option.
+You can use local Whisper for offline transcription, Azure Speech, or OpenRouter (OpenAI Whisper in the cloud).
 
 For local Whisper, `./setup.sh` handles the full setup. It creates `.venv-whisper`, installs `openai-whisper`, points `.env` at the virtual environment, creates `.whisper-models`, and runs a quick speech test. The app reads its own PCM WAV recordings directly; ffmpeg is only needed when transcribing other audio formats through the CLI fallback.
 
 For Azure Speech, create a Speech resource in the [Azure Portal](https://portal.azure.com/), then add the key and region to `.env` with `SPEECH_PROVIDER=azure`.
 
+For OpenRouter speech-to-text, add your `OPENROUTER_API_KEY` and set `SPEECH_PROVIDER=openrouter`. Audio is sent to OpenRouter's `/audio/transcriptions` endpoint using an OpenAI Whisper model (`openai/whisper-large-v3` by default).
+
 ## How it works
 
 1. **Ask.** Use automatic pause detection, choose manual start/stop capture in Settings, or use the screenshot shortcut.
-2. **Reason.** Gemini reads the audio or image with full conversation context and works toward a precise answer.
+2. **Reason.** Your AI provider reads the audio or image with full conversation context and works toward a precise answer.
 3. **Answer.** Voice responses stream to chat, the overlay, or both, according to Settings.
 
 ## Keyboard shortcuts
@@ -161,7 +175,7 @@ OpenCluely is under active development. The core is stable and improvements ship
 
 - Stealth overlay with a draggable command bar and a click through toggle
 - Hidden during screen share, with automatic hiding when a share begins
-- Screenshot capture with direct Gemini analysis, no OCR step
+- Screenshot capture with direct vision-model analysis, no OCR step
 - Configurable manual or VAD-driven voice capture
 - Persistent local Whisper worker with optional CUDA acceleration and idle GPU release
 - Configurable chat/overlay routing for streamed voice answers
@@ -170,14 +184,14 @@ OpenCluely is under active development. The core is stable and improvements ship
 - Global shortcuts for capture, visibility, interaction, chat, and settings
 - Session memory and a full chat UI
 - Language picker and a DSA skill prompt
-- Optional Azure Speech and local Whisper, with an auto hiding mic button
+- Selectable AI backend: Gemini or OpenRouter
+- Optional Azure Speech, local Whisper, or OpenRouter cloud transcription, with an auto hiding mic button
 - Multi-monitor and area capture support
 - Window binding and positioning
 - Settings management with disguise and stealth modes
 
 ### Planned
 
-- Multiple model backends alongside Gemini (OpenAI, Anthropic, local)
 - Auto typing of code snippets into editors and IDEs
 - Export of conversation history to markdown or PDF
 - Deeper stealth, including process name randomization
@@ -225,8 +239,8 @@ Released under the MIT License. See [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
-- Google Gemini for the AI reasoning
-- Azure Speech and OpenAI Whisper for optional voice input
+- Google Gemini and OpenRouter for AI reasoning
+- Azure Speech and OpenAI Whisper (local and via OpenRouter) for optional voice input
 - Electron for the cross platform desktop runtime
 - [Vysper by varun-singhh](https://github.com/varun-singhh/Vysper) for UI and structure inspiration
 

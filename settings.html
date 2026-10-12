@@ -360,6 +360,7 @@
                         <select class="input-field" id="speechProvider">
                             <option value="azure">Azure Speech</option>
                             <option value="whisper">Local Whisper</option>
+                            <option value="openrouter">OpenRouter Whisper (cloud)</option>
                         </select>
                     </div>
 
@@ -450,6 +451,27 @@
                         </div>
                     </div>
 
+                    <!-- OpenRouter speech fields (shown only when OpenRouter is selected) -->
+                    <div id="openrouterSpeechFields" class="settings-group">
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">OpenRouter STT Model</div>
+                                <div class="settings-item-description">Whisper model slug used for cloud transcription, e.g. <code>openai/whisper-large-v3</code></div>
+                            </div>
+                            <input type="text" class="input-field" id="openrouterSttModel" placeholder="openai/whisper-large-v3">
+                        </div>
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Whisper Language</div>
+                                <div class="settings-item-description">Language code or auto-detection for transcription</div>
+                            </div>
+                            <input type="text" class="input-field" id="openrouterSttLanguage" placeholder="auto">
+                        </div>
+                        <div class="settings-note">
+                            OpenRouter transcription runs in the cloud and uses the shared <code>OPENROUTER_API_KEY</code> from the AI Provider section below. Audio chunks are sent to OpenRouter's <code>/audio/transcriptions</code> endpoint.
+                        </div>
+                    </div>
+
                     <div id="azureFieldsNote" class="settings-note">
                         Azure credentials apply immediately and are also written back to <code>.env</code> so they persist across restarts.
                     </div>
@@ -459,15 +481,48 @@
             <div class="settings-section">
                 <div class="settings-section-title">
                     <i class="fas fa-robot"></i>
-                    Gemini Settings
+                    AI Provider
                 </div>
                 <div class="settings-section-content">
                     <div class="settings-item">
                         <div>
-                            <div class="settings-item-label">Google API Key</div>
-                            <div class="settings-item-description">Your Google API key for Gemini models</div>
+                            <div class="settings-item-label">Answer Provider</div>
+                            <div class="settings-item-description">Which model backend generates answers, screenshots and chat replies</div>
                         </div>
-                        <input type="password" class="input-field" id="geminiKey" placeholder="Enter your Google API key">
+                        <select class="input-field" id="llmProvider">
+                            <option value="gemini">Google Gemini</option>
+                            <option value="openrouter">OpenRouter</option>
+                        </select>
+                    </div>
+
+                    <div id="geminiFields" class="settings-group">
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Google API Key</div>
+                                <div class="settings-item-description">Your Google API key for Gemini models</div>
+                            </div>
+                            <input type="password" class="input-field" id="geminiKey" placeholder="Enter your Google API key">
+                        </div>
+                    </div>
+
+                    <div id="openrouterFields" class="settings-group">
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">OpenRouter API Key</div>
+                                <div class="settings-item-description">Shared by OpenRouter answers and OpenRouter speech-to-text</div>
+                            </div>
+                            <input type="password" class="input-field" id="openrouterKey" placeholder="sk-or-...">
+                        </div>
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">OpenRouter Model</div>
+                                <div class="settings-item-description">Model slug for answers. Screenshots need a vision-capable model</div>
+                            </div>
+                            <input type="text" class="input-field" id="openrouterModel" placeholder="deepseek/deepseek-v4.1-flash">
+                        </div>
+                        <div class="settings-note">
+                            Get a key at <code>openrouter.ai/settings/keys</code>. The key and models are written back to <code>.env</code> so they persist across restarts.
+                        </div>
                     </div>
                 </div>
             </div>

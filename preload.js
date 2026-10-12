@@ -35,6 +35,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setGeminiApiKey: (apiKey) => ipcRenderer.invoke('set-gemini-api-key', apiKey),
   getGeminiStatus: () => ipcRenderer.invoke('get-gemini-status'),
   testGeminiConnection: () => ipcRenderer.invoke('test-gemini-connection'),
+
+  // Provider-agnostic LLM configuration (Gemini or OpenRouter)
+  setOpenRouterApiKey: (apiKey) => ipcRenderer.invoke('set-openrouter-api-key', apiKey),
+  getLlmStatus: () => ipcRenderer.invoke('get-llm-status'),
+  testLlmConnection: () => ipcRenderer.invoke('test-llm-connection'),
+  // Speech connection test (active provider: whisper / azure / openrouter)
+  testSpeechConnection: () => ipcRenderer.invoke('test-speech-connection'),
   
   // Settings
   showSettings: () => ipcRenderer.invoke('show-settings'),

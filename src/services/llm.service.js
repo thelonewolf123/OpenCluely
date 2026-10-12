@@ -7,6 +7,7 @@ class LLMService {
   constructor() {
     this.client = null;
     this.model = null;
+    this.provider = 'gemini';
     this.isInitialized = false;
     this.requestCount = 0;
     this.errorCount = 0;
@@ -15,12 +16,28 @@ class LLMService {
   }
 
   initializeClient() {
+    const requested = String(
+      process.env.LLM_PROVIDER || config.get('llm.provider') || 'gemini'
+    ).trim().toLowerCase();
+    this.provider = requested === 'openrouter' ? 'openrouter' : 'gemini';
+    this.client = null;
+    this.isInitialized = false;
+
+    if (this.provider === 'openrouter') {
+      this._initializeOpenRouterClient();
+      return;
+    }
+
+    this._initializeGeminiClient();
+  }
+
+  _initializeGeminiClient() {
     const apiKey = config.getApiKey('GEMINI');
     
-    if (!apiKey || apiKey === 'your-api-key-here') {
+    if (!apiKey || apiKey === 'your-api-key-here' || apiKey === 'your_gemini_api_key_here') {
       logger.warn('Gemini API key not configured', { 
         keyExists: !!apiKey,
-        isPlaceholder: apiKey === 'your-api-key-here'
+        isPlaceholder: apiKey === 'your-api-key-here' || apiKey === 'your_gemini_api_key_here'
       });
       return;
     }
@@ -42,15 +59,53 @@ class LLMService {
     }
   }
 
+  _initializeOpenRouterClient() {
+    const apiKey = config.getApiKey('OPENROUTER');
+
+    if (!apiKey || /your.*openrouter.*key/i.test(apiKey)) {
+      logger.warn('OpenRouter API key not configured', {
+        keyExists: !!apiKey
+      });
+      return;
+    }
+
+    try {
+      this.model = process.env.OPENROUTER_MODEL || config.get('llm.openrouter.model');
+      this.isInitialized = true;
+      logger.info('OpenRouter client initialized successfully', {
+        model: this.model
+      });
+    } catch (error) {
+      logger.error('Failed to initialize OpenRouter client', {
+        error: error.message
+      });
+    }
+  }
+
+  _notInitializedMessage() {
+    return this.provider === 'openrouter'
+      ? 'LLM service not initialized. Check OpenRouter API key configuration.'
+      : 'LLM service not initialized. Check Gemini API key configuration.';
+  }
+
   getGenerationConfig(overrides = {}) {
-    const defaults = config.get('llm.gemini.generation') || {};
-    const fallback = {
-      temperature: 0.7,
-      topK: 40,
-      topP: 0.95,
-      maxOutputTokens: 4096,
-      thinkingConfig: { thinkingBudget: 0 }
-    };
+    const isOpenRouter = this.provider === 'openrouter';
+    const defaults = (isOpenRouter
+      ? config.get('llm.openrouter.generation')
+      : config.get('llm.gemini.generation')) || {};
+    const fallback = isOpenRouter
+      ? {
+          temperature: 0.7,
+          topP: 0.9,
+          maxOutputTokens: 4096
+        }
+      : {
+          temperature: 0.7,
+          topK: 40,
+          topP: 0.95,
+          maxOutputTokens: 4096,
+          thinkingConfig: { thinkingBudget: 0 }
+        };
 
     const merged = { ...fallback, ...defaults, ...overrides };
     return Object.fromEntries(
@@ -123,7 +178,7 @@ class LLMService {
    */
   async processImageWithSkill(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null) {
     if (!this.isInitialized) {
-      throw new Error('LLM service not initialized. Check Gemini API key configuration.');
+      throw new Error(this._notInitializedMessage());
     }
 
     if (!imageBuffer || !Buffer.isBuffer(imageBuffer)) {
@@ -227,7 +282,7 @@ class LLMService {
 
   async processImageWithSkillStream(imageBuffer, mimeType, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta = null) {
     if (!this.isInitialized) {
-      throw new Error('LLM service not initialized. Check Gemini API key configuration.');
+      throw new Error(this._notInitializedMessage());
     }
 
     if (!imageBuffer || !Buffer.isBuffer(imageBuffer)) {
@@ -304,7 +359,7 @@ class LLMService {
 
   async processTextWithSkill(text, activeSkill, sessionMemory = [], programmingLanguage = null) {
     if (!this.isInitialized) {
-      throw new Error('LLM service not initialized. Check Gemini API key configuration.');
+      throw new Error(this._notInitializedMessage());
     }
 
     const startTime = Date.now();
@@ -391,7 +446,7 @@ class LLMService {
 
   async processTextWithSkillStream(text, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta = null) {
     if (!this.isInitialized) {
-      throw new Error('LLM service not initialized. Check Gemini API key configuration.');
+      throw new Error(this._notInitializedMessage());
     }
 
     const startTime = Date.now();
@@ -439,7 +494,7 @@ class LLMService {
 
   async processTranscriptionWithIntelligentResponse(text, activeSkill, sessionMemory = [], programmingLanguage = null) {
     if (!this.isInitialized) {
-      throw new Error('LLM service not initialized. Check Gemini API key configuration.');
+      throw new Error(this._notInitializedMessage());
     }
 
     const startTime = Date.now();
@@ -839,6 +894,10 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
   }
 
   async executeRequest(geminiRequest) {
+    if (this.provider === 'openrouter') {
+      return this._executeOpenRouterRequest(geminiRequest);
+    }
+
     const maxRetries = config.get('llm.gemini.maxRetries');
     const timeout = config.get('llm.gemini.timeout');
     const primaryModel = this.model;
@@ -980,7 +1039,7 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
    */
   async processTranscriptionWithIntelligentResponseStream(text, activeSkill, sessionMemory = [], programmingLanguage = null, onDelta = null) {
     if (!this.isInitialized) {
-      throw new Error('LLM service not initialized. Check Gemini API key configuration.');
+      throw new Error(this._notInitializedMessage());
     }
 
     const startTime = Date.now();
@@ -1048,16 +1107,290 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     }
   }
 
+  // ── OpenRouter (OpenAI-compatible) transport ──────────────────────
+  // The rest of the service builds Gemini-shaped request objects. These
+  // helpers translate that shape into OpenRouter chat-completions messages
+  // and run the HTTPS calls, so every existing process* method works
+  // unchanged regardless of the active provider.
+
+  /** Concatenate the text parts of a Gemini `parts` array. */
+  _extractGeminiPartsText(parts) {
+    if (!Array.isArray(parts)) {
+      return '';
+    }
+    return parts
+      .filter((p) => p && typeof p.text === 'string' && p.text.length > 0)
+      .map((p) => p.text)
+      .join('\n')
+      .trim();
+  }
+
+  /**
+   * Convert a Gemini request object ({contents, systemInstruction,
+   * generationConfig}) into an OpenRouter chat-completions payload. Inline
+   * image data becomes an OpenAI-style `image_url` data URI, which requires a
+   * vision-capable model for screenshot analysis.
+   */
+  _toOpenRouterPayload(request, model, stream) {
+    const messages = [];
+
+    const systemText = this._extractGeminiPartsText(request?.systemInstruction?.parts);
+    if (systemText) {
+      messages.push({ role: 'system', content: systemText });
+    }
+
+    const contents = Array.isArray(request?.contents) ? request.contents : [];
+    for (const item of contents) {
+      const role = item?.role === 'model' ? 'assistant' : (item?.role || 'user');
+      const parts = Array.isArray(item?.parts) ? item.parts : [];
+      const hasMedia = parts.some((p) => p && (p.inlineData || p.fileData));
+
+      if (!hasMedia) {
+        const text = this._extractGeminiPartsText(parts);
+        if (text) {
+          messages.push({ role, content: text });
+        }
+        continue;
+      }
+
+      const contentParts = [];
+      for (const part of parts) {
+        if (part && typeof part.text === 'string' && part.text.length > 0) {
+          contentParts.push({ type: 'text', text: part.text });
+        } else if (part && part.inlineData) {
+          const mime = part.inlineData.mimeType || 'image/png';
+          const data = part.inlineData.data || '';
+          contentParts.push({
+            type: 'image_url',
+            image_url: { url: `data:${mime};base64,${data}` }
+          });
+        }
+      }
+      if (contentParts.length) {
+        messages.push({ role, content: contentParts });
+      }
+    }
+
+    const generation = request?.generationConfig || {};
+    const payload = { model, messages, stream: !!stream };
+    if (generation.temperature !== undefined) payload.temperature = generation.temperature;
+    if (generation.topP !== undefined) payload.top_p = generation.topP;
+    if (generation.topK !== undefined) payload.top_k = generation.topK;
+    if (generation.maxOutputTokens !== undefined) payload.max_tokens = generation.maxOutputTokens;
+    return payload;
+  }
+
+  _openRouterHeaders(apiKey, postData) {
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Length': Buffer.byteLength(postData),
+      // App attribution headers (optional, but requested by OpenRouter docs).
+      'HTTP-Referer': 'https://github.com/TechyCSR/OpenCluely',
+      'X-OpenRouter-Title': 'OpenCluely',
+      'User-Agent': this.getUserAgent()
+    };
+  }
+
+  /** Non-streaming OpenRouter call with model-fallback + retry. */
+  async _executeOpenRouterRequest(request) {
+    const maxRetries = config.get('llm.openrouter.maxRetries') || 3;
+    const fallbackModels = config.get('llm.openrouter.fallbackModels') || [];
+    const modelsToTry = [this.model, ...fallbackModels].filter(Boolean);
+    let lastError = null;
+
+    for (const modelName of modelsToTry) {
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          return await this._openRouterNonStreamingCall(request, modelName);
+        } catch (error) {
+          const errorInfo = this.analyzeError(error);
+          lastError = error;
+
+          logger.warn(`OpenRouter attempt ${attempt} failed for model ${modelName}`, {
+            error: error.message,
+            errorType: errorInfo.type,
+            model: modelName
+          });
+
+          const isModelUnavailable = errorInfo.type === 'RATE_LIMIT_ERROR' ||
+            error.message.includes('503') ||
+            error.message.includes('404') ||
+            error.message.includes('unavailable');
+
+          if (isModelUnavailable && modelName !== modelsToTry[modelsToTry.length - 1]) {
+            break; // try the next fallback model
+          }
+          if (attempt === maxRetries) {
+            break;
+          }
+
+          const baseDelay = errorInfo.isNetworkError ? 2500 : 1500;
+          await this.delay(baseDelay * attempt + Math.random() * 1000);
+        }
+      }
+    }
+
+    const finalError = new Error(`OpenRouter API failed: ${lastError?.message}`);
+    finalError.originalError = lastError;
+    throw finalError;
+  }
+
+  _openRouterNonStreamingCall(request, modelName) {
+    const https = require('https');
+    const apiKey = config.getApiKey('OPENROUTER');
+    const timeout = config.get('llm.openrouter.timeout') || 60000;
+    const postData = JSON.stringify(this._toOpenRouterPayload(request, modelName, false));
+    const agent = new https.Agent({ keepAlive: true, maxSockets: 1 });
+
+    const options = {
+      hostname: 'openrouter.ai',
+      path: '/api/v1/chat/completions',
+      method: 'POST',
+      headers: this._openRouterHeaders(apiKey, postData),
+      timeout,
+      agent
+    };
+
+    return new Promise((resolve, reject) => {
+      const req = https.request(options, (res) => {
+        let data = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            reject(new Error(`HTTP ${res.statusCode}: ${data.substring(0, 500)}`));
+            return;
+          }
+          try {
+            const json = JSON.parse(data);
+            if (json && json.error) {
+              reject(new Error(json.error.message || 'OpenRouter error'));
+              return;
+            }
+            const content = json?.choices?.[0]?.message?.content;
+            if (typeof content !== 'string' || !content.trim()) {
+              reject(new Error('Empty response from OpenRouter'));
+              return;
+            }
+            resolve(content.trim());
+          } catch (parseError) {
+            reject(new Error(`Failed to parse OpenRouter response: ${parseError.message}`));
+          }
+        });
+      });
+
+      req.on('error', (error) => reject(new Error(`OpenRouter request failed: ${error.message}`)));
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('OpenRouter request timeout'));
+      });
+
+      req.write(postData);
+      req.end();
+    });
+  }
+
+  /** Pull the text delta out of a streamed OpenRouter/OpenAI chunk. */
+  _extractOpenRouterChunkText(chunk) {
+    try {
+      const choice = chunk && chunk.choices && chunk.choices[0];
+      const delta = choice && (choice.delta || choice.message);
+      if (delta && typeof delta.content === 'string') {
+        return delta.content;
+      }
+    } catch (_) {
+      // ignore malformed chunks
+    }
+    return '';
+  }
+
+  _streamOpenRouterRequest(request, modelName, onDelta) {
+    const https = require('https');
+    const apiKey = config.getApiKey('OPENROUTER');
+    const timeout = config.get('llm.openrouter.timeout') || 60000;
+    const postData = JSON.stringify(this._toOpenRouterPayload(request, modelName, true));
+    const agent = new https.Agent({ keepAlive: true, maxSockets: 1 });
+
+    const options = {
+      hostname: 'openrouter.ai',
+      path: '/api/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        ...this._openRouterHeaders(apiKey, postData),
+        'Accept': 'text/event-stream'
+      },
+      timeout,
+      agent
+    };
+
+    return new Promise((resolve, reject) => {
+      const req = https.request(options, (res) => {
+        if (res.statusCode !== 200) {
+          let errBody = '';
+          res.on('data', (c) => { errBody += c; });
+          res.on('end', () => reject(new Error(`HTTP ${res.statusCode}: ${errBody.substring(0, 500)}`)));
+          return;
+        }
+
+        let fullText = '';
+        let buffer = '';
+
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          buffer += chunk;
+          let idx;
+          while ((idx = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, idx).trim();
+            buffer = buffer.slice(idx + 1);
+            if (!line.startsWith('data:')) {
+              continue;
+            }
+            const payload = line.slice(5).trim();
+            if (!payload || payload === '[DONE]') {
+              continue;
+            }
+            try {
+              const json = JSON.parse(payload);
+              const piece = this._extractOpenRouterChunkText(json);
+              if (piece) {
+                fullText += piece;
+                if (typeof onDelta === 'function') {
+                  onDelta(piece);
+                }
+              }
+            } catch (_) {
+              // Partial JSON across chunk boundaries; skip unparseable lines.
+            }
+          }
+        });
+
+        res.on('end', () => resolve(fullText.trim()));
+        res.on('error', (error) => reject(new Error(`OpenRouter stream error: ${error.message}`)));
+      });
+
+      req.on('error', (error) => reject(new Error(`OpenRouter streaming request failed: ${error.message}`)));
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('OpenRouter streaming request timeout'));
+      });
+
+      req.write(postData);
+      req.end();
+    });
+  }
+
   /**
    * Run a streaming Gemini request with the same model-fallback + retry policy
    * as executeRequest. Accumulates and returns the full text; invokes onDelta
    * for each chunk.
    */
   async executeStreamingRequest(geminiRequest, onDelta) {
-    const maxRetries = config.get('llm.gemini.maxRetries');
-    const apiKey = config.getApiKey('GEMINI');
+    const isOpenRouter = this.provider === 'openrouter';
+    const maxRetries = config.get(isOpenRouter ? 'llm.openrouter.maxRetries' : 'llm.gemini.maxRetries');
+    const apiKey = isOpenRouter ? config.getApiKey('OPENROUTER') : config.getApiKey('GEMINI');
     const primaryModel = this.model;
-    const fallbackModels = config.get('llm.gemini.fallbackModels') || [];
+    const fallbackModels = config.get(isOpenRouter ? 'llm.openrouter.fallbackModels' : 'llm.gemini.fallbackModels') || [];
     const modelsToTry = [primaryModel, ...fallbackModels];
 
     let lastError = null;
@@ -1113,6 +1446,10 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
   }
 
   _streamRequestForModel(geminiRequest, modelName, apiKey, onDelta) {
+    if (this.provider === 'openrouter') {
+      return this._streamOpenRouterRequest(geminiRequest, modelName, onDelta);
+    }
+
     const https = require('https');
     const timeout = config.get('llm.gemini.timeout');
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse`;
@@ -1240,18 +1577,24 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     // API key errors
     if (errorMessage.includes('unauthorized') || 
         errorMessage.includes('invalid api key') ||
-        errorMessage.includes('forbidden')) {
+        errorMessage.includes('no auth credentials') ||
+        errorMessage.includes('forbidden') ||
+        errorMessage.includes('http 401') ||
+        errorMessage.includes('http 403')) {
       return {
         type: 'AUTH_ERROR',
         isNetworkError: false,
-        suggestedAction: 'Verify Gemini API key configuration'
+        suggestedAction: 'Verify the configured API key'
       };
     }
     
-    // Rate limiting
+    // Rate limiting / insufficient credits
     if (errorMessage.includes('quota') || 
         errorMessage.includes('rate limit') ||
-        errorMessage.includes('too many requests')) {
+        errorMessage.includes('too many requests') ||
+        errorMessage.includes('http 429') ||
+        errorMessage.includes('http 402') ||
+        errorMessage.includes('insufficient credits')) {
       return {
         type: 'RATE_LIMIT_ERROR',
         isNetworkError: false,
@@ -1278,7 +1621,8 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
   async checkNetworkConnectivity() {
     const connectivityTests = [
       { host: 'google.com', port: 443, name: 'Google (HTTPS)' },
-      { host: 'generativelanguage.googleapis.com', port: 443, name: 'Gemini API Endpoint' }
+      { host: 'generativelanguage.googleapis.com', port: 443, name: 'Gemini API Endpoint' },
+      { host: 'openrouter.ai', port: 443, name: 'OpenRouter API Endpoint' }
     ];
 
     const results = await Promise.allSettled(
@@ -1330,7 +1674,7 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
       'dsa': 'This appears to be a data structures and algorithms problem. Consider breaking it down into smaller components and identifying the appropriate algorithm or data structure to use.',
       'system-design': 'For this system design question, consider scalability, reliability, and the trade-offs between different architectural approaches.',
       'programming': 'This looks like a programming challenge. Focus on understanding the requirements, edge cases, and optimal time/space complexity.',
-      'default': 'I can help analyze this content. Please ensure your Gemini API key is properly configured for detailed analysis.'
+      'default': 'I can help analyze this content. Please ensure your AI provider API key is properly configured for detailed analysis.'
     };
 
     const response = fallbackResponses[activeSkill] || fallbackResponses.default;
@@ -1392,6 +1736,10 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
   async testConnection() {
     if (!this.isInitialized) {
       return { success: false, error: 'Service not initialized' };
+    }
+
+    if (this.provider === 'openrouter') {
+      return this._testOpenRouterConnection();
     }
 
     try {
@@ -1481,49 +1829,104 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
   }
 
   /**
+   * OpenRouter connection test: a minimal chat completion against the
+   * configured model, mirroring the Gemini test's {success, latency, model}
+   * shape so callers/UI work unchanged.
+   */
+  async _testOpenRouterConnection() {
+    const networkCheck = await this.checkNetworkConnectivity().catch(() => null);
+    const startTime = Date.now();
+
+    try {
+      const text = await this._openRouterNonStreamingCall({
+        contents: [{ role: 'user', parts: [{ text: 'Test connection. Please respond with "OK".' }] }],
+        generationConfig: { temperature: 0, maxOutputTokens: 16 }
+      }, this.model);
+
+      return {
+        success: true,
+        response: text,
+        latency: Date.now() - startTime,
+        model: this.model,
+        networkConnectivity: networkCheck
+      };
+    } catch (error) {
+      const errorAnalysis = this.analyzeError(error);
+      logger.error('OpenRouter connection test failed', {
+        error: error.message,
+        errorAnalysis
+      });
+      return {
+        success: false,
+        error: this._friendlyTestError(error, errorAnalysis),
+        errorType: errorAnalysis?.type || 'UNKNOWN',
+        errorAnalysis,
+        networkConnectivity: networkCheck
+      };
+    }
+  }
+
+  /**
    * Translate raw SDK / network errors into something a user can act on.
    */
   _friendlyTestError(error, analysis) {
     const type = analysis?.type;
     const raw = (error?.message || '').toLowerCase();
+    const isOpenRouter = this.provider === 'openrouter';
+    const hostLabel = isOpenRouter ? 'OpenRouter' : 'Google';
+    const keyHint = isOpenRouter
+      ? 'Double-check the key at openrouter.ai/settings/keys.'
+      : 'Double-check the key at aistudio.google.com/apikey.';
 
     if (type === 'NETWORK_ERROR' || raw.includes('fetch failed') || raw.includes('enotfound')) {
-      return 'Cannot reach Google servers. Check your internet connection, firewall, or VPN settings.';
+      return `Cannot reach ${hostLabel} servers. Check your internet connection, firewall, or VPN settings.`;
     }
     if (type === 'AUTH_ERROR' || raw.includes('api key') || raw.includes('401') || raw.includes('403')) {
-      return 'Invalid API key or insufficient permissions. Double-check the key at aistudio.google.com/apikey.';
+      return `Invalid API key or insufficient permissions. ${keyHint}`;
     }
-    if (type === 'RATE_LIMIT_ERROR' || raw.includes('429') || raw.includes('quota')) {
-      return 'Rate limit or quota exceeded. Wait a moment or check your Google Cloud billing.';
+    if (type === 'RATE_LIMIT_ERROR' || raw.includes('429') || raw.includes('quota') || raw.includes('402')) {
+      return isOpenRouter
+        ? 'Rate limit or insufficient credits on OpenRouter. Check your balance or wait a moment.'
+        : 'Rate limit or quota exceeded. Wait a moment or check your Google Cloud billing.';
     }
     if (type === 'TIMEOUT_ERROR') {
-      return 'Request timed out. The Google API may be slow or unreachable right now.';
+      return `Request timed out. The ${hostLabel} API may be slow or unreachable right now.`;
     }
-    if (type === 'MODEL_ERROR' || raw.includes('model') || raw.includes('404')) {
-      return 'The configured Gemini model is unavailable. Try a different model in Settings.';
+    if (type === 'MODEL_ERROR' || raw.includes('404')) {
+      return isOpenRouter
+        ? 'The configured OpenRouter model is unavailable. Try a different model slug in Settings.'
+        : 'The configured Gemini model is unavailable. Try a different model in Settings.';
     }
     if (raw.includes('503') || raw.includes('unavailable') || raw.includes('high demand')) {
-      return 'Gemini is experiencing high demand. Please wait a moment and try again.';
+      return `${hostLabel} is experiencing high demand. Please wait a moment and try again.`;
     }
     // Fall back to a stripped-down raw message (no SDK prefix noise)
     return (error?.message || 'Connection failed').replace(/^\[(GoogleGenerativeAI|GoogleGenAI) Error\]:\s*/i, '');
   }
 
-  updateApiKey(newApiKey) {
-    process.env.GEMINI_API_KEY = newApiKey;
+  updateApiKey(newApiKey, provider = this.provider) {
+    if (provider === 'openrouter') {
+      process.env.OPENROUTER_API_KEY = newApiKey;
+    } else {
+      process.env.GEMINI_API_KEY = newApiKey;
+    }
     this.isInitialized = false;
     this.initializeClient();
     
-    logger.info('API key updated and client reinitialized');
+    logger.info('API key updated and client reinitialized', { provider });
   }
 
   getStats() {
     return {
+      provider: this.provider,
+      model: this.model,
       isInitialized: this.isInitialized,
       requestCount: this.requestCount,
       errorCount: this.errorCount,
       successRate: this.requestCount > 0 ? ((this.requestCount - this.errorCount) / this.requestCount) * 100 : 0,
-      config: config.get('llm.gemini')
+      config: this.provider === 'openrouter'
+        ? config.get('llm.openrouter')
+        : config.get('llm.gemini')
     };
   }
 
@@ -1532,6 +1935,13 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
   }
 
   async executeAlternativeRequest(geminiRequest) {
+    // OpenRouter has a single transport, so the "alternative" method just
+    // retries the same OpenRouter request. This keeps the existing
+    // primary→secondary fallback logic in the process* methods intact.
+    if (this.provider === 'openrouter') {
+      return this._executeOpenRouterRequest(geminiRequest);
+    }
+
     const https = require('https');
     const apiKey = config.getApiKey('GEMINI');
     const primaryModel = config.get('llm.gemini.model');

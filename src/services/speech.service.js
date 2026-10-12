@@ -453,7 +453,12 @@ class SpeechService extends EventEmitter {
       return;
     }
 
-    const reason = 'Speech recognition disabled. Configure Azure or local Whisper.';
+    if (provider === 'openrouter') {
+      this._initializeOpenRouterClient();
+      return;
+    }
+
+    const reason = 'Speech recognition disabled. Configure Azure, local Whisper, or OpenRouter.';
     logger.warn(reason);
     this.emit('status', reason);
   }
@@ -539,6 +544,37 @@ class SpeechService extends EventEmitter {
     }
   }
 
+  /**
+   * OpenRouter speech-to-text. Shares the buffered PCM → WAV pipeline with the
+   * local Whisper provider; only the final transcription call differs (an HTTP
+   * request to OpenRouter's /audio/transcriptions endpoint).
+   */
+  _initializeOpenRouterClient() {
+    try {
+      const apiKey = this._getSetting('openRouterKey') || process.env.OPENROUTER_API_KEY;
+      if (!apiKey || /your.*openrouter.*key/i.test(apiKey)) {
+        const reason = 'OpenRouter API key not found. Speech recognition disabled.';
+        logger.warn('Speech service disabled (missing OpenRouter API key)');
+        this.emit('status', reason);
+        return;
+      }
+
+      this.available = true;
+      logger.info('OpenRouter speech-to-text initialized successfully', {
+        model: this._getOpenRouterModel(),
+        language: this._getOpenRouterLanguage()
+      });
+      this.emit('status', 'OpenRouter Whisper ready');
+    } catch (error) {
+      logger.error('Failed to initialize OpenRouter speech client', {
+        error: error.message,
+        stack: error.stack
+      });
+      this.available = false;
+      this.emit('status', 'OpenRouter speech unavailable');
+    }
+  }
+
   startRecording() {
     try {
       if (!this.available) {
@@ -567,6 +603,11 @@ class SpeechService extends EventEmitter {
       }
 
       if (this.provider === 'whisper') {
+        this._startWhisperRecording();
+        return;
+      }
+
+      if (this.provider === 'openrouter') {
         this._startWhisperRecording();
         return;
       }
@@ -686,7 +727,9 @@ class SpeechService extends EventEmitter {
     this.manualStopRequested = false;
     this._resetVadState();
     this.emit('recording-started');
-    this.emit('status', 'Local Whisper recording started');
+    this.emit('status', this.provider === 'openrouter'
+      ? 'OpenRouter Whisper recording started'
+      : 'Local Whisper recording started');
 
     if (this.whisperWorker.isConfigured()) {
       this.whisperWorker.warmup({
@@ -759,7 +802,7 @@ class SpeechService extends EventEmitter {
       clearInterval(this.segmentTimer);
     }
     this.segmentTimer = setInterval(() => {
-      if (!this.isRecording || this.provider !== 'whisper') {
+      if (!this.isRecording || !this._isBufferedProvider()) {
         return;
       }
 
@@ -788,7 +831,7 @@ class SpeechService extends EventEmitter {
    * the current Whisper segment buffer.
    */
   handleAudioChunkFromRenderer(chunk) {
-    if (!this.isRecording || this.provider !== 'whisper' || !this.useRendererCapture) {
+    if (!this.isRecording || !this._isBufferedProvider() || !this.useRendererCapture) {
       return;
     }
     if (!chunk || !chunk.length) {
@@ -974,10 +1017,12 @@ class SpeechService extends EventEmitter {
       return;
     }
 
-    if (this.provider === 'whisper') {
+    if (this._isBufferedProvider()) {
       this.isProcessingAudio = true;
       this.emit('recording-stopped');
-      this.emit('status', 'Processing local speech…');
+      this.emit('status', this.provider === 'openrouter'
+        ? 'Processing speech via OpenRouter…'
+        : 'Processing local speech…');
       this._finalizeWhisperStop({ captureAlreadyStopped: true });
       return;
     }
@@ -1111,6 +1156,11 @@ class SpeechService extends EventEmitter {
       return this._transcribeWhisperFile(audioFilePath);
     }
 
+    if (this.provider === 'openrouter') {
+      const wav = fs.readFileSync(audioFilePath);
+      return this._transcribeOpenRouterAudio(wav);
+    }
+
     throw new Error('Speech service not initialized');
   }
 
@@ -1154,6 +1204,21 @@ class SpeechService extends EventEmitter {
       };
     }
 
+    if (this.provider === 'openrouter') {
+      const apiKey = this._getSetting('openRouterKey') || process.env.OPENROUTER_API_KEY;
+      if (!apiKey) {
+        return { success: false, message: 'OpenRouter API key not configured' };
+      }
+      try {
+        // Transcribe a short silent WAV to validate credentials + endpoint.
+        const silence = Buffer.alloc(3200); // 100ms of 16kHz mono 16-bit PCM
+        await this._transcribeOpenRouterAudio(this._createWavBuffer(silence));
+        return { success: true, message: 'OpenRouter transcription connection successful' };
+      } catch (error) {
+        return { success: false, message: error.message };
+      }
+    }
+
     return { success: false, message: 'Speech service not initialized' };
   }
 
@@ -1162,7 +1227,11 @@ class SpeechService extends EventEmitter {
       provider: this.provider,
       isRecording: this.isRecording,
       isProcessingAudio: this.isProcessingAudio,
-      isInitialized: this.provider === 'azure' ? !!this.speechConfig : !!this.whisperCommand,
+      isInitialized: this.provider === 'azure'
+        ? !!this.speechConfig
+        : this.provider === 'openrouter'
+          ? !!this.available
+          : !!this.whisperCommand,
       sessionDuration: this.sessionStartTime ? Date.now() - this.sessionStartTime : 0,
       retryCount: this.retryCount,
       effectiveSettings: {
@@ -1175,11 +1244,14 @@ class SpeechService extends EventEmitter {
         whisperLanguage: this._getWhisperLanguage(),
         whisperCaptureMode: this._getWhisperCaptureMode(),
         whisperDevice: this._getWhisperDevice(),
-        whisperSegmentMs: String(this._getWhisperSegmentMs())
+        whisperSegmentMs: String(this._getWhisperSegmentMs()),
+        openRouterSttModel: this._getOpenRouterModel(),
+        openRouterSttLanguage: this._getOpenRouterLanguage()
       },
       config: {
         azure: config.get('speech.azure') || {},
         whisper: config.get('speech.whisper') || {},
+        openrouter: config.get('speech.openrouter') || {},
         selectedProvider: this.provider
       }
     };
@@ -1194,11 +1266,20 @@ class SpeechService extends EventEmitter {
       return !!this.whisperCommand && !!this.available;
     }
 
+    if (this.provider === 'openrouter') {
+      return !!this.available && !!(this._getSetting('openRouterKey') || process.env.OPENROUTER_API_KEY);
+    }
+
     return false;
   }
 
   isManualCaptureMode() {
-    return this.provider === 'whisper' && this._getWhisperCaptureMode() === 'manual';
+    return this._isBufferedProvider() && this._getWhisperCaptureMode() === 'manual';
+  }
+
+  /** whisper and openrouter share the buffered PCM → WAV → transcribe path. */
+  _isBufferedProvider() {
+    return this.provider === 'whisper' || this.provider === 'openrouter';
   }
 
   shutdown() {
@@ -1209,7 +1290,7 @@ class SpeechService extends EventEmitter {
   }
 
   updateSettings(settings = {}) {
-    const speechKeys = ['speechProvider', 'azureKey', 'azureRegion', 'whisperCommand', 'whisperModelDir', 'whisperModel', 'whisperLanguage', 'whisperCaptureMode', 'whisperDevice', 'whisperSegmentMs'];
+    const speechKeys = ['speechProvider', 'azureKey', 'azureRegion', 'whisperCommand', 'whisperModelDir', 'whisperModel', 'whisperLanguage', 'whisperCaptureMode', 'whisperDevice', 'whisperSegmentMs', 'openRouterKey', 'openRouterSttModel', 'openRouterSttLanguage'];
     let changed = false;
 
     for (const key of speechKeys) {
@@ -1229,7 +1310,7 @@ class SpeechService extends EventEmitter {
   _getConfiguredProvider() {
     const provider = String(this._getSetting('speechProvider') || process.env.SPEECH_PROVIDER || '').trim().toLowerCase();
 
-    if (provider === 'azure' || provider === 'whisper') {
+    if (provider === 'azure' || provider === 'whisper' || provider === 'openrouter') {
       return provider;
     }
 
@@ -1240,7 +1321,23 @@ class SpeechService extends EventEmitter {
       return 'azure';
     }
 
+    // If an OpenRouter key is present and no local Whisper CLI is configured,
+    // prefer the cloud option.
+    const hasOpenRouter = !!(this._getSetting('openRouterKey') || process.env.OPENROUTER_API_KEY);
+    const hasWhisper = !!(this._getSetting('whisperCommand') || process.env.WHISPER_COMMAND);
+    if (hasOpenRouter && !hasWhisper) {
+      return 'openrouter';
+    }
+
     return 'whisper';
+  }
+
+  _getOpenRouterModel() {
+    return this._getSetting('openRouterSttModel') || process.env.OPENROUTER_STT_MODEL || config.get('speech.openrouter.model') || 'openai/whisper-large-v3';
+  }
+
+  _getOpenRouterLanguage() {
+    return this._getSetting('openRouterSttLanguage') || process.env.OPENROUTER_STT_LANGUAGE || config.get('speech.openrouter.language') || this._getWhisperLanguage();
   }
 
   _getWhisperModel() {
@@ -1801,7 +1898,7 @@ class SpeechService extends EventEmitter {
       return;
     }
 
-    if (this.provider === 'whisper') {
+    if (this._isBufferedProvider()) {
       this._ingestWhisperAudio(Buffer.from(chunk));
     }
   }
@@ -1880,7 +1977,101 @@ class SpeechService extends EventEmitter {
     return HALLUCINATIONS.has(normalized);
   }
 
+  /**
+   * OpenRouter speech-to-text. Reuses the same 16 kHz mono PCM buffering as the
+   * local Whisper path; the raw PCM is wrapped into a WAV and posted as base64
+   * to OpenRouter's OpenAI-compatible /audio/transcriptions endpoint.
+   */
+  async _transcribeOpenRouterBuffer(rawPcmBuffer) {
+    return this._transcribeOpenRouterAudio(this._createWavBuffer(rawPcmBuffer));
+  }
+
+  async _transcribeOpenRouterAudio(wavBuffer) {
+    const apiKey = this._getSetting('openRouterKey') || process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      throw new Error('OpenRouter API key not configured');
+    }
+
+    const body = {
+      model: this._getOpenRouterModel(),
+      input_audio: {
+        data: Buffer.from(wavBuffer).toString('base64'),
+        format: 'wav'
+      }
+    };
+
+    const language = this._getOpenRouterLanguage();
+    if (language && language !== 'auto' && language !== 'detect') {
+      body.language = language;
+    }
+
+    const startedAt = Date.now();
+    const text = await this._postOpenRouterTranscription(body, apiKey);
+    logger.info('OpenRouter transcription completed', {
+      processingTime: Date.now() - startedAt,
+      model: body.model,
+      language: language || 'auto',
+      textLength: (text || '').length
+    });
+    return text || '';
+  }
+
+  _postOpenRouterTranscription(body, apiKey) {
+    const https = require('https');
+    const postData = JSON.stringify(body);
+    const options = {
+      hostname: 'openrouter.ai',
+      path: '/api/v1/audio/transcriptions',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Length': Buffer.byteLength(postData),
+        'HTTP-Referer': 'https://github.com/TechyCSR/OpenCluely',
+        'X-OpenRouter-Title': 'OpenCluely'
+      },
+      timeout: 60000
+    };
+
+    return new Promise((resolve, reject) => {
+      const req = https.request(options, (res) => {
+        let data = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            reject(new Error(`OpenRouter transcription HTTP ${res.statusCode}: ${data.substring(0, 300)}`));
+            return;
+          }
+          try {
+            const json = JSON.parse(data);
+            if (json && json.error) {
+              reject(new Error(json.error.message || 'OpenRouter transcription error'));
+              return;
+            }
+            resolve(typeof json.text === 'string' ? json.text : '');
+          } catch (error) {
+            reject(new Error(`Failed to parse OpenRouter transcription: ${error.message}`));
+          }
+        });
+      });
+
+      req.on('error', (error) => reject(new Error(`OpenRouter transcription failed: ${error.message}`)));
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('OpenRouter transcription timeout'));
+      });
+
+      req.write(postData);
+      req.end();
+    });
+  }
+
   async _transcribeWhisperBuffer(audioBuffer) {
+    if (this.provider === 'openrouter') {
+      return this._transcribeOpenRouterBuffer(audioBuffer);
+    }
+
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencluely-whisper-'));
     const audioFilePath = path.join(tempDir, 'segment.wav');
 

@@ -738,14 +738,37 @@
                 </div>
             </section>
 
-            <!-- SCREEN 2: API Key -->
+            <!-- SCREEN 2: API Key / Provider -->
             <section class="screen" data-screen="apikey">
-                <h1>Connect Google Gemini</h1>
+                <h1>Connect your AI provider</h1>
                 <p class="subtitle">
-                    OpenCluely uses Google's Gemini to generate answers. You'll need a free API key.
+                    Choose the backend that generates answers. You can switch this later in Settings.
                 </p>
 
-                <div class="field">
+                <div class="choice-list" id="llmChoices">
+                    <div class="choice-card selected" data-value="gemini">
+                        <div class="choice-icon"><i class="fas fa-key"></i></div>
+                        <div class="choice-text">
+                            <div class="choice-title">Google Gemini</div>
+                            <div class="choice-desc">
+                                Free API key from Google AI Studio. Fast and reliable for text and screenshots.
+                            </div>
+                        </div>
+                        <div class="choice-radio"></div>
+                    </div>
+                    <div class="choice-card" data-value="openrouter">
+                        <div class="choice-icon"><i class="fas fa-network-wired"></i></div>
+                        <div class="choice-text">
+                            <div class="choice-title">OpenRouter</div>
+                            <div class="choice-desc">
+                                One key for many models — DeepSeek, OpenAI, Anthropic and more. Also powers OpenRouter speech-to-text.
+                            </div>
+                        </div>
+                        <div class="choice-radio"></div>
+                    </div>
+                </div>
+
+                <div id="geminiKeyPanel" class="field" style="margin-top: 14px;">
                     <label for="geminiKey">Gemini API Key</label>
                     <div class="input-wrap">
                         <i class="fas fa-key icon"></i>
@@ -768,10 +791,35 @@
                         </a>.
                         It's stored locally in <code>.env</code> — never sent anywhere except Google.
                     </div>
-                    <div id="keyStatus" class="status-pill idle" style="display:none;">
-                        <i class="fas fa-circle-info"></i>
-                        <span class="text">Enter your key above</span>
+                </div>
+
+                <div id="openrouterKeyPanel" class="field" style="display:none; margin-top: 14px;">
+                    <label for="openrouterKey">OpenRouter API Key</label>
+                    <div class="input-wrap">
+                        <i class="fas fa-key icon"></i>
+                        <input
+                            type="password"
+                            id="openrouterKey"
+                            class="input"
+                            placeholder="sk-or-…"
+                            autocomplete="off"
+                            spellcheck="false"
+                        >
+                        <button class="toggle-vis" id="toggleOrVis" type="button" title="Show / hide">
+                            <i class="fas fa-eye"></i>
+                        </button>
                     </div>
+                    <div class="hint">
+                        Create a key at
+                        <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noreferrer">
+                            openrouter.ai/settings/keys
+                        </a>. Stored locally in <code>.env</code>.
+                    </div>
+                </div>
+
+                <div id="keyStatus" class="status-pill idle" style="display:none; margin-top: 12px;">
+                    <i class="fas fa-circle-info"></i>
+                    <span class="text">Enter your key above</span>
                 </div>
 
             </section>
@@ -806,6 +854,17 @@
                         </div>
                         <div class="choice-radio"></div>
                     </div>
+                    <div class="choice-card" data-value="openrouter">
+                        <div class="choice-icon"><i class="fas fa-network-wired"></i></div>
+                        <div class="choice-text">
+                            <div class="choice-title">OpenRouter Whisper</div>
+                            <div class="choice-desc">
+                                Cloud transcription with OpenAI Whisper via OpenRouter. Fast and accurate;
+                                reuses your OpenRouter key and requires internet.
+                            </div>
+                        </div>
+                        <div class="choice-radio"></div>
+                    </div>
                     <div class="choice-card" data-value="skip">
                         <div class="choice-icon"><i class="fas fa-forward"></i></div>
                         <div class="choice-text">
@@ -834,6 +893,18 @@
                             <input type="text" id="azureRegion" class="input" placeholder="eastus" autocomplete="off">
                         </div>
                         <div class="hint">e.g. <code>eastus</code>, <code>westus2</code>, <code>westeurope</code></div>
+                    </div>
+                </div>
+
+                <!-- Inline OpenRouter key entry (revealed only if OpenRouter selected) -->
+                <div id="speechOpenrouterPanel" style="display:none; margin-top: 14px;">
+                    <div class="field">
+                        <label for="speechOpenrouterKey">OpenRouter API Key</label>
+                        <div class="input-wrap">
+                            <i class="fas fa-key icon"></i>
+                            <input type="password" id="speechOpenrouterKey" class="input" placeholder="sk-or-…" autocomplete="off">
+                        </div>
+                        <div class="hint">Reuses your OpenRouter key. Leave blank if you already entered one on the previous step.</div>
                     </div>
                 </div>
             </section>

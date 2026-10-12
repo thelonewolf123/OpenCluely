@@ -39,6 +39,9 @@ class ConfigManager {
       },
 
       llm: {
+        // Active answer-generation provider. 'gemini' (default) or 'openrouter'.
+        // LLM_PROVIDER overrides this at runtime.
+        provider: 'gemini',
         gemini: {
           model: 'gemini-3.1-flash-lite',
           fallbackModels: ['gemini-2.5-flash-lite', 'gemini-3.5-flash'],
@@ -52,6 +55,21 @@ class ConfigManager {
             topP: 0.9,
             maxOutputTokens: 4096,
             thinkingConfig: { thinkingBudget: 0 }
+          }
+        },
+        // OpenRouter is OpenAI-compatible. The model slug stays configurable
+        // because OpenRouter's catalogue changes frequently. Screenshots use
+        // the same model, so pick a vision-capable slug if you rely on them.
+        openrouter: {
+          model: 'deepseek/deepseek-v4.1-flash',
+          fallbackModels: [],
+          maxRetries: 3,
+          timeout: 60000,
+          fallbackEnabled: true,
+          generation: {
+            temperature: 0.7,
+            topP: 0.9,
+            maxOutputTokens: 4096
           }
         }
       },
@@ -88,6 +106,12 @@ class ConfigManager {
           // Absolute RMS energy floor (normalized 0..1). Energy below this is
           // always treated as silence regardless of the adaptive noise floor.
           vadEnergyFloor: 0.008
+        },
+        // Cloud speech-to-text through OpenRouter's /audio/transcriptions
+        // endpoint. Shares OPENROUTER_API_KEY with the OpenRouter LLM provider.
+        openrouter: {
+          model: 'openai/whisper-large-v3',
+          language: 'auto'
         }
       },
 

@@ -653,12 +653,34 @@ class ApplicationController {
     });
 
     ipcMain.handle("set-gemini-api-key", (event, apiKey) => {
-      llmService.updateApiKey(apiKey);
+      llmService.updateApiKey(apiKey, 'gemini');
+      return llmService.getStats();
+    });
+
+    ipcMain.handle("set-openrouter-api-key", (event, apiKey) => {
+      llmService.updateApiKey(apiKey, 'openrouter');
       return llmService.getStats();
     });
 
     ipcMain.handle("get-gemini-status", () => {
       return llmService.getStats();
+    });
+
+    // Provider-agnostic aliases — resolve to whichever LLM provider is active.
+    ipcMain.handle("get-llm-status", () => {
+      return llmService.getStats();
+    });
+
+    ipcMain.handle("test-llm-connection", async () => {
+      return await llmService.testConnection();
+    });
+
+    ipcMain.handle("test-speech-connection", async () => {
+      try {
+        return await speechService.testConnection();
+      } catch (error) {
+        return { success: false, message: error.message };
+      }
     });
 
     // Window binding IPC handlers
@@ -1608,6 +1630,12 @@ class ApplicationController {
       whisperSegmentMs: process.env.WHISPER_SEGMENT_MS || "4000",
       geminiKey: process.env.GEMINI_API_KEY || "",
 
+      llmProvider: llmService.provider || process.env.LLM_PROVIDER || "gemini",
+      openrouterKey: process.env.OPENROUTER_API_KEY || "",
+      openrouterModel: process.env.OPENROUTER_MODEL || "",
+      openrouterSttModel: process.env.OPENROUTER_STT_MODEL || "",
+      openrouterSttLanguage: process.env.OPENROUTER_STT_LANGUAGE || "",
+
       azureConfigured: !!process.env.AZURE_SPEECH_KEY && !!process.env.AZURE_SPEECH_REGION,
       speechAvailable: this.speechAvailable
     };
@@ -1645,7 +1673,7 @@ class ApplicationController {
       // Writing to .env ensures they survive app restarts and are picked
       // up the next time the app boots.
       const envUpdates = {};
-      if (settings.speechProvider === "azure" || settings.speechProvider === "whisper") {
+      if (["azure", "whisper", "openrouter"].includes(settings.speechProvider)) {
         envUpdates.SPEECH_PROVIDER = settings.speechProvider;
       }
       if (settings.azureKey !== undefined) {
@@ -1678,26 +1706,50 @@ class ApplicationController {
       if (settings.geminiKey !== undefined) {
         envUpdates.GEMINI_API_KEY = settings.geminiKey;
       }
+      if (["gemini", "openrouter"].includes(settings.llmProvider)) {
+        envUpdates.LLM_PROVIDER = settings.llmProvider;
+      }
+      if (settings.openrouterKey !== undefined) {
+        envUpdates.OPENROUTER_API_KEY = settings.openrouterKey;
+      }
+      if (settings.openrouterModel !== undefined) {
+        envUpdates.OPENROUTER_MODEL = settings.openrouterModel;
+      }
+      if (settings.openrouterSttModel !== undefined) {
+        envUpdates.OPENROUTER_STT_MODEL = settings.openrouterSttModel;
+      }
+      if (settings.openrouterSttLanguage !== undefined) {
+        envUpdates.OPENROUTER_STT_LANGUAGE = settings.openrouterSttLanguage;
+      }
 
       // Capture the previous whisper command BEFORE persisting — persistEnvUpdates
       // mutates process.env in place, so comparing afterwards would always read
       // equal and skip the speech re-init below (the exact stale-mic-after-install
       // bug the re-init guards against).
       const prevWhisperCommand = process.env.WHISPER_COMMAND || '';
+      const prevLlmProvider = process.env.LLM_PROVIDER || llmService.provider || 'gemini';
+      const prevOpenRouterKey = process.env.OPENROUTER_API_KEY || '';
 
       const persistedKeys = this.persistEnvUpdates(envUpdates);
 
-      // If the Gemini key was just saved, reinitialize the LLM service
-      // so the new client picks up the key. Without this, the test-
-      // connection button in the onboarding wizard fails with
-      // "Service not initialized" because the client was first created
-      // at app startup, before any key was set.
-      if (settings.geminiKey !== undefined && envUpdates.GEMINI_API_KEY !== undefined) {
+      // Reinitialize the LLM service when the active provider or its credential
+      // changes, so the new client picks up the key/provider immediately (later
+      // `settings.geminiKey` handling below is a legacy path that still works).
+      const llmProviderChanged = settings.llmProvider !== undefined &&
+        prevLlmProvider !== String(settings.llmProvider || '');
+      const openRouterKeyChanged = settings.openrouterKey !== undefined &&
+        prevOpenRouterKey !== String(settings.openrouterKey || '');
+      if (llmProviderChanged || openRouterKeyChanged ||
+        (settings.geminiKey !== undefined && envUpdates.GEMINI_API_KEY !== undefined)) {
         try {
           llmService.initializeClient();
-          logger.info("LLM service reinitialized after Gemini key update");
+          logger.info("LLM service reinitialized after settings change", {
+            provider: llmService.provider,
+            llmProviderChanged,
+            openRouterKeyChanged
+          });
         } catch (e) {
-          logger.warn("Failed to reinitialize LLM service after Gemini key update", {
+          logger.warn("Failed to reinitialize LLM service after settings change", {
             error: e.message
           });
         }
@@ -1708,11 +1760,12 @@ class ApplicationController {
       // writes a new whisperCommand after install but keeps the same
       // provider) would leave the speech service pointing at a stale
       // (or non-existent) binary, and the main overlay's mic button
-      // would stay hidden / non-functional.
+      // would stay hidden / non-functional. An OpenRouter key change also
+      // re-inits because the OpenRouter STT provider depends on it.
       const providerChanged = settings.speechProvider && speechService.provider !== settings.speechProvider;
       const whisperCommandChanged = settings.whisperCommand !== undefined &&
         prevWhisperCommand !== String(settings.whisperCommand || '');
-      if (providerChanged || whisperCommandChanged) {
+      if (providerChanged || whisperCommandChanged || openRouterKeyChanged) {
         try {
           speechService.initializeClient();
           this.speechAvailable = speechService.isAvailable
@@ -1730,6 +1783,7 @@ class ApplicationController {
           logger.info('Speech service reinitialized after settings change', {
             providerChanged,
             whisperCommandChanged,
+            openRouterKeyChanged,
             speechAvailable: this.speechAvailable,
           });
         } catch (e) {
