@@ -6,8 +6,9 @@ class PromptLoader {
     this.prompts = new Map();
     this.promptsLoaded = false;
     this.skillPromptSent = new Set();
-    // Focus only on DSA
-    this.skillsRequiringProgrammingLanguage = ['dsa'];
+    // The universal interview copilot accepts a coding language for coding
+    // questions; dsa.md is kept for coding-focused use.
+    this.skillsRequiringProgrammingLanguage = ['interview', 'dsa', 'programming'];
   }
 
   /**
@@ -28,7 +29,6 @@ class PromptLoader {
       for (const file of files) {
         if (file.endsWith('.md')) {
           const skillName = path.basename(file, '.md');
-          if (skillName !== 'dsa') continue; // only keep DSA
           const filePath = path.join(promptsDir, file);
           const promptContent = fs.readFileSync(filePath, 'utf8');
           
@@ -88,6 +88,14 @@ class PromptLoader {
     let languageInjection = '';
     
     switch (skillName) {
+      case 'interview':
+        languageInjection = `\n\n## CODING LANGUAGE: ${languageUpper}
+When (and only when) the question is a coding problem:
+- Answer in ${languageTitle} only, using triple backticks tagged exactly \`\`\`${fenceTag}\`\`\`.
+- Give the optimal solution and state its time and space complexity.
+- If a template or pre-written code is provided, adapt it rather than replacing it.
+For non-coding questions, answer in plain prose and do not include code.`;
+        break;
       case 'dsa':
         languageInjection = `\n\n## IMPLEMENTATION LANGUAGE: ${languageUpper}
 STRICT REQUIREMENTS:
@@ -317,13 +325,17 @@ STRICT REQUIREMENTS:
    * @returns {string} Normalized skill name
    */
   normalizeSkillName(skillName) {
-    if (!skillName) return 'general';
+    if (!skillName) return 'interview';
     
     // Convert to lowercase and handle common variations
     const normalized = skillName.toLowerCase().trim();
     
     // Map common variations to standard names
     const skillMap = {
+      'interview': 'interview',
+      'general': 'interview',
+      'general-interview': 'interview',
+      'copilot': 'interview',
       'dsa': 'dsa',
       'data-structures': 'dsa',
       'algorithms': 'dsa',
@@ -368,7 +380,7 @@ STRICT REQUIREMENTS:
     if (!this.promptsLoaded) {
       this.loadPrompts();
     }
-    return ['dsa'];
+    return ['interview'];
   }
 
   /**

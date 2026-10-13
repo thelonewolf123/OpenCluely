@@ -32,7 +32,10 @@ class FirstRunManager {
     if (!fs.existsSync(this.envPath)) return true;
     const content = this._readEnv();
     const gemini = (content.GEMINI_API_KEY || '').trim();
-    return !gemini || gemini === 'your_gemini_api_key_here';
+    const openrouter = (content.OPENROUTER_API_KEY || '').trim();
+    const geminiOk = !!gemini && gemini !== 'your_gemini_api_key_here';
+    const openrouterOk = !!openrouter && !/your.*openrouter.*key/i.test(openrouter);
+    return !geminiOk && !openrouterOk;
   }
 
   /**
@@ -80,10 +83,12 @@ class FirstRunManager {
   getStatus() {
     const env = this._readEnv();
     const gemini = (env.GEMINI_API_KEY || '').trim();
+    const openrouter = (env.OPENROUTER_API_KEY || '').trim();
     return {
       envExists: fs.existsSync(this.envPath),
       sentinelExists: fs.existsSync(this.sentinelPath),
       geminiConfigured: !!gemini && gemini !== 'your_gemini_api_key_here',
+      openrouterConfigured: !!openrouter && !/your.*openrouter.*key/i.test(openrouter),
       azureConfigured: !!(env.AZURE_SPEECH_KEY || '').trim() && !!(env.AZURE_SPEECH_REGION || '').trim(),
       whisperConfigured: !!(env.WHISPER_COMMAND || '').trim(),
       needsOnboarding: this.needsOnboarding()
@@ -144,11 +149,25 @@ class FirstRunManager {
       '',
       'GEMINI_API_KEY=your_gemini_api_key_here',
       '',
-      '# Speech provider: "whisper" (local) or "azure" (cloud).',
-      '# WHISPER_COMMAND is auto-set to the project-local venv when you',
-      '# install Whisper through the onboarding wizard, so no PATH change',
-      '# or restart is needed.',
-      'SPEECH_PROVIDER=whisper',
+      '# LLM provider: "gemini" (default) or "openrouter".',
+      'LLM_PROVIDER=gemini',
+      '',
+      '# OpenRouter (optional). One key powers OpenRouter answers and',
+      '# OpenRouter speech-to-text. Create a key at:',
+      '# https://openrouter.ai/settings/keys',
+      '# OPENROUTER_API_KEY=',
+      '# OPENROUTER_MODEL=deepseek/deepseek-v4.1-flash',
+      '',
+      '# Speech provider: "openrouter" (cloud, default), "azure" (cloud), or',
+      '# "whisper" (local). OpenRouter reuses OPENROUTER_API_KEY and needs no',
+      '# local install. WHISPER_COMMAND is auto-set to the project-local venv',
+      '# when you install Whisper through the onboarding wizard, so no PATH',
+      '# change or restart is needed.',
+      'SPEECH_PROVIDER=openrouter',
+      '# Audio source: "microphone" (default) or "system" (speaker/output,',
+      '# i.e. the interviewer\'s voice). Windows captures system audio',
+      '# automatically; macOS/Linux need a loopback device selected in Settings.',
+      'SPEECH_AUDIO_SOURCE=microphone',
       'WHISPER_COMMAND=whisper',
       '# WHISPER_MODEL_DIR is optional. Leave it unset and the app stores model',
       '# weights in a stable app-data folder. Set an absolute path to override.',
@@ -162,6 +181,8 @@ class FirstRunManager {
       'WHISPER_MANUAL_MAX_MS=90000',
       'WHISPER_GPU_IDLE_MS=60000',
       'WHISPER_SEGMENT_MS=4000',
+      '# OpenRouter speech-to-text model (used when SPEECH_PROVIDER=openrouter).',
+      '# OPENROUTER_STT_MODEL=openai/whisper-large-v3',
       ''
     ].join(os.EOL);
   }
