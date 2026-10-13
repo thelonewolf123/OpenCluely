@@ -75,7 +75,18 @@ class ConfigManager {
       },
 
       speech: {
-        provider: 'azure',
+        // Product default. Actual provider resolution lives in
+        // speech.service.js (_getConfiguredProvider), which honors
+        // SPEECH_PROVIDER / configured credentials.
+        provider: 'openrouter',
+        // Where the microphone audio comes from. 'microphone' captures the mic;
+        // 'system' captures the speaker/system output (loopback), which is what
+        // you want when transcribing the interviewer's voice.
+        audioSource: 'microphone',
+        // Optional specific input device id for system-audio capture (e.g. a
+        // BlackHole/Loopback virtual device on macOS, or a PulseAudio monitor on
+        // Linux). Empty means "use the platform default / native loopback".
+        audioDeviceId: '',
         azure: {
           language: 'en-US',
           enableDictation: true,

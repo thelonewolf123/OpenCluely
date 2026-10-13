@@ -255,25 +255,44 @@
   }
 
   // ── Wire up: Speech choices ───────────────────────────────────────
-  $$('#speechChoices .choice-card').forEach((card) => {
-    card.addEventListener('click', () => {
-      const value = card.dataset.value;
-      state.speechProvider = value;
-      $$('#speechChoices .choice-card').forEach((c) => c.classList.remove('selected'));
-      card.classList.add('selected');
-      const azurePanel = $('#azurePanel');
-      azurePanel.style.display = value === 'azure' ? 'block' : 'none';
-      const orPanel = $('#speechOpenrouterPanel');
-      if (orPanel) orPanel.style.display = value === 'openrouter' ? 'block' : 'none';
-      if (value !== 'azure') {
-        state.azureKey = '';
-        state.azureRegion = '';
-      }
-      if (value !== 'openrouter') {
-        state.speechOpenrouterKey = '';
-      }
+  // OpenRouter Whisper is the recommended default, so it is pre-selected
+  // when the user reaches the speech step unless they've already chosen.
+  const DEFAULT_SPEECH_PROVIDER = 'openrouter';
+
+  function selectSpeechProvider(value) {
+    state.speechProvider = value;
+    $$('#speechChoices .choice-card').forEach((c) => {
+      c.classList.toggle('selected', c.dataset.value === value);
     });
+    const azurePanel = $('#azurePanel');
+    if (azurePanel) azurePanel.style.display = value === 'azure' ? 'block' : 'none';
+    const orPanel = $('#speechOpenrouterPanel');
+    if (orPanel) orPanel.style.display = value === 'openrouter' ? 'block' : 'none';
+    if (value !== 'azure') {
+      state.azureKey = '';
+      state.azureRegion = '';
+    }
+    if (value !== 'openrouter') {
+      state.speechOpenrouterKey = '';
+    }
+  }
+
+  $$('#speechChoices .choice-card').forEach((card) => {
+    card.addEventListener('click', () => selectSpeechProvider(card.dataset.value));
   });
+
+  function enterSpeechScreen() {
+    if (!state.speechProvider) {
+      selectSpeechProvider(DEFAULT_SPEECH_PROVIDER);
+    }
+    // Reuse the OpenRouter key entered on the API-key step (if any) so the
+    // user doesn't have to paste it twice.
+    const orInput = $('#speechOpenrouterKey');
+    if (orInput && !orInput.value && state.openrouterKey) {
+      orInput.value = state.openrouterKey;
+      state.speechOpenrouterKey = state.openrouterKey;
+    }
+  }
 
   $('#azureKey').addEventListener('input', (e) => { state.azureKey = e.target.value.trim(); });
   $('#azureRegion').addEventListener('input', (e) => { state.azureRegion = e.target.value.trim(); });
@@ -620,9 +639,12 @@
     }
     if (name === 'speech' && window.electronAPI) {
       try {
+        // "Skip" keeps the recommended default rather than silently forcing
+        // the local Whisper install path — it can be configured later in
+        // Settings.
         const payload = {
           speechProvider:
-            state.speechProvider === 'skip' ? 'whisper' : state.speechProvider,
+            state.speechProvider === 'skip' ? DEFAULT_SPEECH_PROVIDER : state.speechProvider,
         };
         if (state.speechProvider === 'azure') {
           payload.azureKey = state.azureKey;
@@ -716,6 +738,7 @@
     _origShowScreen(name);
     refreshSkipVisibility();
     refreshStepper();
+    if (name === 'speech') enterSpeechScreen();
   };
 
   skipBtn.addEventListener('click', () => {

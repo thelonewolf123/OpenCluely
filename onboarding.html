@@ -384,6 +384,19 @@
             font-weight: 600;
             margin-bottom: 2px;
         }
+        .choice-badge {
+            display: inline-block;
+            margin-left: 6px;
+            padding: 1px 6px;
+            border: 1px solid var(--border-hover);
+            border-radius: 999px;
+            font-size: 9.5px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            vertical-align: middle;
+        }
         .choice-desc {
             font-size: 11.5px;
             color: var(--text-dim);
@@ -832,13 +845,13 @@
                 </p>
 
                 <div class="choice-list" id="speechChoices">
-                    <div class="choice-card" data-value="whisper">
-                        <div class="choice-icon"><i class="fas fa-microphone"></i></div>
+                    <div class="choice-card" data-value="openrouter">
+                        <div class="choice-icon"><i class="fas fa-network-wired"></i></div>
                         <div class="choice-text">
-                            <div class="choice-title">Local Whisper</div>
+                            <div class="choice-title">OpenRouter Whisper <span class="choice-badge">Recommended</span></div>
                             <div class="choice-desc">
-                                Run OpenAI Whisper on your own machine. Free, offline, and private —
-                                no data leaves your computer. Requires Python.
+                                Cloud transcription with OpenAI Whisper via OpenRouter. Fast and accurate;
+                                reuses your OpenRouter key and needs no local install.
                             </div>
                         </div>
                         <div class="choice-radio"></div>
@@ -854,13 +867,13 @@
                         </div>
                         <div class="choice-radio"></div>
                     </div>
-                    <div class="choice-card" data-value="openrouter">
-                        <div class="choice-icon"><i class="fas fa-network-wired"></i></div>
+                    <div class="choice-card" data-value="whisper">
+                        <div class="choice-icon"><i class="fas fa-microphone"></i></div>
                         <div class="choice-text">
-                            <div class="choice-title">OpenRouter Whisper</div>
+                            <div class="choice-title">Local Whisper</div>
                             <div class="choice-desc">
-                                Cloud transcription with OpenAI Whisper via OpenRouter. Fast and accurate;
-                                reuses your OpenRouter key and requires internet.
+                                Run OpenAI Whisper on your own machine. Free, offline, and private —
+                                no data leaves your computer. Requires Python and a one-time setup.
                             </div>
                         </div>
                         <div class="choice-radio"></div>

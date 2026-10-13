@@ -100,6 +100,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Display management
   listDisplays: () => ipcRenderer.invoke('list-displays'),
   captureArea: (options) => ipcRenderer.invoke('capture-area', options),
+  // Screen sources for system-audio (loopback) capture on Windows
+  getDesktopSources: () => ipcRenderer.invoke('get-desktop-sources'),
   
   // Event listeners
   onTranscriptionReceived: (callback) => ipcRenderer.on('transcription-received', callback),

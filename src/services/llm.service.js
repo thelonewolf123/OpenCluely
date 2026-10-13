@@ -353,8 +353,8 @@ class LLMService {
   }
 
   formatImageInstruction(activeSkill, programmingLanguage) {
-    const langNote = programmingLanguage ? ` Use only ${programmingLanguage.toUpperCase()} for any code.` : '';
-    return `Analyze this image for a ${activeSkill.toUpperCase()} question. Extract the problem concisely and provide the best possible solution with explanation and final code.${langNote}`;
+    const langNote = programmingLanguage ? ` If it is a coding question, use only ${programmingLanguage.toUpperCase()} for any code.` : '';
+    return `This is a screenshot from a live interview. Identify what is being asked or shown, then give the best possible answer the candidate can read and use immediately. If it is a coding problem, extract it and provide a complete, runnable solution.${langNote}`;
   }
 
   async processTextWithSkill(text, activeSkill, sessionMemory = [], programmingLanguage = null) {
@@ -834,63 +834,43 @@ class LLMService {
   }
 
   getIntelligentTranscriptionPrompt(activeSkill, programmingLanguage) {
-    let prompt = `# Intelligent Transcription Response System
+    let prompt = `# Real-Time Interview Copilot
 
-Assume you are asked a question in ${activeSkill.toUpperCase()} mode. Your job is to intelligently respond to question/message with appropriate brevity.
-Assume you are in an interview and you need to perform best in ${activeSkill.toUpperCase()} mode.
-Always respond to the point, do not repeat the question or unnecessary information which is not related to ${activeSkill}.`;
+You are an invisible interview copilot listening live to a conversation. The text below is what was just said out loud (usually by the interviewer). Work out what the speaker wants and answer so the candidate can read your reply on screen and say it naturally.
 
-    // Add programming language context if provided
+## Classify the input first
+- Greeting, small talk, filler, or a statement that needs no answer -> reply with one very short, natural acknowledgement and nothing else.
+- Behavioral / situational question ("Tell me about a time…") -> answer in the first person, Situation → Task → Action → Result.
+- Coding / DSA / algorithms question -> state the idea and complexity in a line or two, then give a complete, runnable implementation.
+- System design, product, data, sales, or general knowledge question -> give a crisp, structured answer.
+- Follow-up -> stay consistent with the conversation history.
+
+## Answer rules
+- Lead with the answer; never restate the question or pad with filler.
+- Be concise: a few tight bullets, or one small code block. The candidate is reading this while talking.
+- Be correct and confident. Cover the key points and any important trade-off.
+- Never reveal that you are an AI or a tool, and never narrate that you are helping.
+- If the input is unrelated to the interview, keep the reply to a single short line so you don't waste attention.`;
+
+    // Add programming language context if provided.
     if (programmingLanguage) {
       const lang = String(programmingLanguage).toLowerCase();
       const languageMap = { cpp: 'C++', c: 'C', python: 'Python', java: 'Java', javascript: 'JavaScript', js: 'JavaScript' };
       const fenceTagMap = { cpp: 'cpp', c: 'c', python: 'python', java: 'java', javascript: 'javascript', js: 'javascript' };
       const languageTitle = languageMap[lang] || (lang.charAt(0).toUpperCase() + lang.slice(1));
       const fenceTag = fenceTagMap[lang] || lang || 'text';
-      prompt += `\n\nCODING CONTEXT: Respond ONLY in ${languageTitle}. All code blocks must use triple backticks with language tag \`\`\`${fenceTag}\`\`\`. Do not include other languages unless explicitly asked.`;
+      prompt += `\n\nCODING QUESTIONS: When (and only when) the question is a coding problem, respond in ${languageTitle} using triple backticks tagged exactly \`\`\`${fenceTag}\`\`\`, with the optimal solution and its time and space complexity. For every other kind of question, answer in plain prose.`;
     }
 
     prompt += `
 
-## Response Rules:
-
-### If the transcription is casual conversation, greetings, or NOT related to ${activeSkill}:
-- Respond with: "Yeah, I'm listening. Ask your question relevant to ${activeSkill}."
-- Or similar brief acknowledgments like: "I'm here, what's your ${activeSkill} question?"
-
-### If the transcription IS relevant to ${activeSkill} or is a follow-up question:
-- Provide a comprehensive, detailed response
-- Use bullet points, examples, and explanations
-- Focus on actionable insights and complete answers
-- Do not truncate or shorten your response
-
-### Examples of casual/irrelevant messages:
-- "Hello", "Hi there", "How are you?"
-- "What's the weather like?"
-- "I'm just testing this"
-- Random conversations not related to ${activeSkill}
-
-### Examples of relevant messages:
-- Actual questions about ${activeSkill} concepts
-- Follow-up questions to previous responses
-- Requests for clarification on ${activeSkill} topics
-- Problem-solving requests related to ${activeSkill}
-
-## Response Format:
-- Keep responses detailed
-- Use bullet points for structured answers
-- Be encouraging and helpful
-- Stay focused on ${activeSkill}
-
-If the user's input is a coding or DSA problem statement and contains no code, produce a complete, runnable solution in the selected programming language without asking for more details. Always include the final implementation in a properly tagged code block.
-
-Remember: Be intelligent about filtering - only provide detailed responses when the user actually needs help with ${activeSkill}.`;
+If the input is a coding or DSA problem statement and contains no code, produce a complete, runnable solution in the selected programming language without asking for more details, and end with the final implementation in a properly tagged code block.`;
 
     return prompt;
   }
 
   formatUserMessage(text, activeSkill) {
-    return `Context: ${activeSkill.toUpperCase()} analysis request\n\nText to analyze:\n${text}`;
+    return `Interview question:\n${text}`;
   }
 
   async executeRequest(geminiRequest) {
@@ -1671,6 +1651,7 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
     logger.info('Generating fallback response', { activeSkill });
 
     const fallbackResponses = {
+      'interview': 'I could not reach the model for that one. Give it another try in a moment.',
       'dsa': 'This appears to be a data structures and algorithms problem. Consider breaking it down into smaller components and identifying the appropriate algorithm or data structure to use.',
       'system-design': 'For this system design question, consider scalability, reliability, and the trade-offs between different architectural approaches.',
       'programming': 'This looks like a programming challenge. Focus on understanding the requirements, edge cases, and optimal time/space complexity.',
@@ -1693,36 +1674,10 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
   generateIntelligentFallbackResponse(text, activeSkill) {
     logger.info('Generating intelligent fallback response for transcription', { activeSkill });
 
-    // Simple heuristic to determine if message seems skill-related
-    const skillKeywords = {
-      'dsa': ['algorithm', 'data structure', 'array', 'tree', 'graph', 'sort', 'search', 'complexity', 'big o'],
-      'programming': ['code', 'function', 'variable', 'class', 'method', 'bug', 'debug', 'syntax'],
-      'system-design': ['scalability', 'database', 'architecture', 'microservice', 'load balancer', 'cache'],
-      'behavioral': ['interview', 'experience', 'situation', 'leadership', 'conflict', 'team'],
-      'sales': ['customer', 'deal', 'negotiation', 'price', 'revenue', 'prospect'],
-      'presentation': ['slide', 'audience', 'public speaking', 'presentation', 'nervous'],
-      'data-science': ['data', 'model', 'machine learning', 'statistics', 'analytics', 'python', 'pandas'],
-      'devops': ['deployment', 'ci/cd', 'docker', 'kubernetes', 'infrastructure', 'monitoring'],
-      'negotiation': ['negotiate', 'compromise', 'agreement', 'terms', 'conflict resolution']
-    };
-
-    const textLower = text.toLowerCase();
-    const relevantKeywords = skillKeywords[activeSkill] || [];
-    const hasRelevantKeywords = relevantKeywords.some(keyword => textLower.includes(keyword));
-    
-    // Check for question indicators
-    const questionIndicators = ['how', 'what', 'why', 'when', 'where', 'can you', 'could you', 'should i', '?'];
-    const seemsLikeQuestion = questionIndicators.some(indicator => textLower.includes(indicator));
-
-    let response;
-    if (hasRelevantKeywords || seemsLikeQuestion) {
-      response = `I'm having trouble processing that right now, but it sounds like a ${activeSkill} question. Could you rephrase or ask more specifically about what you need help with?`;
-    } else {
-      response = `Yeah, I'm listening. Ask your question relevant to ${activeSkill}.`;
-    }
-    
+    // Keep the fallback short and neutral: the candidate reads this live, so a
+    // long apology or a skill mismatch would be worse than a one-liner.
     return {
-      response,
+      response: "I couldn't reach the model for that just now — give it another try in a moment.",
       metadata: {
         skill: activeSkill,
         processingTime: 0,

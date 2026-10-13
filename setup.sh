@@ -269,7 +269,12 @@ setup_whisper_env() {
     fi
   fi
 
-  upsert_env "SPEECH_PROVIDER" "whisper"
+  # Respect an explicit provider choice (env.example now defaults to
+  # OpenRouter). Only fall back to local Whisper when .env predates the
+  # SPEECH_PROVIDER key entirely.
+  if ! grep -q '^SPEECH_PROVIDER=' .env 2>/dev/null; then
+    upsert_env "SPEECH_PROVIDER" "whisper"
+  fi
   upsert_env "AZURE_SPEECH_KEY" ""
   upsert_env "AZURE_SPEECH_REGION" ""
   upsert_env "WHISPER_COMMAND" "${WHISPER_COMMAND_PATH}"

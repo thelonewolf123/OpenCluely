@@ -112,7 +112,7 @@ class ApplicationController {
   constructor() {
     this.isReady = false;
     this.starting = false;
-    this.activeSkill = "dsa";
+    this.activeSkill = "interview";
   // Default to C++ so language is enforced from first run
   this.codingLanguage = "cpp";
     this.speechAvailable = false;
@@ -418,7 +418,10 @@ class ApplicationController {
 
   setupServiceEventHandlers() {
     speechService.on("recording-started", () => {
-      windowManager.handleRecordingStarted();
+      const captureConfig = typeof speechService.getCaptureConfig === "function"
+        ? speechService.getCaptureConfig()
+        : {};
+      windowManager.handleRecordingStarted(captureConfig);
     });
 
     speechService.on("recording-stopped", () => {
@@ -459,6 +462,20 @@ class ApplicationController {
   ipcMain.handle("take-screenshot", () => this.triggerScreenshotOCR());
   ipcMain.handle("list-displays", () => captureService.listDisplays());
   ipcMain.handle("capture-area", (event, options) => captureService.captureAndProcess(options));
+
+    // Desktop/screen sources for system-audio (loopback) capture. On Windows,
+    // passing a screen source id to getUserMedia with chromeMediaSource
+    // 'desktop' yields the system audio mix.
+    ipcMain.handle("get-desktop-sources", async () => {
+      try {
+        const { desktopCapturer } = require("electron");
+        const sources = await desktopCapturer.getSources({ types: ["screen"] });
+        return sources.map((s) => ({ id: s.id, name: s.name }));
+      } catch (error) {
+        logger.warn("Failed to enumerate desktop sources", { error: error.message });
+        return [];
+      }
+    });
     
     // Provide reliable clipboard write via main process
     ipcMain.handle("copy-to-clipboard", (event, text) => {
@@ -1051,7 +1068,7 @@ class ApplicationController {
 
   navigateSkill(direction) {
     const availableSkills = [
-      "dsa",
+      "interview",
     ];
 
     const currentIndex = availableSkills.indexOf(this.activeSkill);
@@ -1109,7 +1126,7 @@ class ApplicationController {
       // Use image directly with LLM and active skill; do not send chat messages here
       const sessionHistory = sessionManager.getOptimizedHistory();
 
-      const skillsRequiringProgrammingLanguage = ['dsa'];
+      const skillsRequiringProgrammingLanguage = ['interview'];
       const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
 
       this._responseSeq = (this._responseSeq || 0) + 1;
@@ -1175,7 +1192,7 @@ class ApplicationController {
       sessionManager.addUserInput(text, 'llm_input');
 
       // Check if current skill needs programming language context
-      const skillsRequiringProgrammingLanguage = ['dsa'];
+      const skillsRequiringProgrammingLanguage = ['interview'];
       const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
 
       this._responseSeq = (this._responseSeq || 0) + 1;
@@ -1344,7 +1361,7 @@ class ApplicationController {
       });
 
       // Check if current skill needs programming language context
-      const skillsRequiringProgrammingLanguage = ['dsa'];
+      const skillsRequiringProgrammingLanguage = ['interview'];
       const needsProgrammingLanguage = skillsRequiringProgrammingLanguage.includes(this.activeSkill);
 
       // Stream the answer progressively to the configured speech target.
@@ -1612,12 +1629,12 @@ class ApplicationController {
     // distinguish "unset" from "stale value from a previous load".
     return {
       codingLanguage: this.codingLanguage || "cpp",
-      activeSkill: this.activeSkill || "dsa",
+      activeSkill: this.activeSkill || "interview",
       appIcon: this.appIcon || "terminal",
       selectedIcon: this.appIcon || "terminal",
       windowGap: windowManager.windowGap,
 
-      speechProvider: speechService.provider || "whisper",
+      speechProvider: speechService.provider || "openrouter",
       azureKey: process.env.AZURE_SPEECH_KEY || "",
       azureRegion: process.env.AZURE_SPEECH_REGION || "",
       whisperCommand: process.env.WHISPER_COMMAND || "",
@@ -1635,6 +1652,9 @@ class ApplicationController {
       openrouterModel: process.env.OPENROUTER_MODEL || "",
       openrouterSttModel: process.env.OPENROUTER_STT_MODEL || "",
       openrouterSttLanguage: process.env.OPENROUTER_STT_LANGUAGE || "",
+
+      speechAudioSource: process.env.SPEECH_AUDIO_SOURCE || "microphone",
+      speechAudioDeviceId: process.env.SPEECH_AUDIO_DEVICE_ID || "",
 
       azureConfigured: !!process.env.AZURE_SPEECH_KEY && !!process.env.AZURE_SPEECH_REGION,
       speechAvailable: this.speechAvailable
@@ -1720,6 +1740,12 @@ class ApplicationController {
       }
       if (settings.openrouterSttLanguage !== undefined) {
         envUpdates.OPENROUTER_STT_LANGUAGE = settings.openrouterSttLanguage;
+      }
+      if (["microphone", "system"].includes(settings.speechAudioSource)) {
+        envUpdates.SPEECH_AUDIO_SOURCE = settings.speechAudioSource;
+      }
+      if (settings.speechAudioDeviceId !== undefined) {
+        envUpdates.SPEECH_AUDIO_DEVICE_ID = settings.speechAudioDeviceId;
       }
 
       // Capture the previous whisper command BEFORE persisting — persistEnvUpdates

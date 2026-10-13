@@ -625,15 +625,21 @@ class SpeechService extends EventEmitter {
       throw new Error('Azure Speech client not initialized');
     }
 
-    this.isRecording = true;
-    this.emit('recording-started');
-    this.emit('status', 'Azure recording started');
     this._cleanup();
+    this.isRecording = true;
+
+    // System audio (loopback) capture always goes through the renderer, which
+    // forwards PCM chunks to the push stream. Microphone keeps the native
+    // recorder path.
+    const systemSource = this._getAudioSource() === 'system';
+    this.useRendererCapture = systemSource;
 
     try {
       this.pushStream = sdk.AudioInputStream.createPushStream();
       this.audioConfig = sdk.AudioConfig.fromStreamInput(this.pushStream);
-      this._startMicrophoneCapture();
+      if (!systemSource) {
+        this._startMicrophoneCapture();
+      }
       this.recognizer = new sdk.SpeechRecognizer(this.speechConfig, this.audioConfig);
     } catch (error) {
       logger.error('Failed to start Azure recording session', { error: error.message });
@@ -641,6 +647,11 @@ class SpeechService extends EventEmitter {
       this.isRecording = false;
       return;
     }
+
+    this.emit('recording-started');
+    this.emit('status', systemSource
+      ? 'Azure recording started (system audio)'
+      : 'Azure recording started');
 
     this.recognizer.recognizing = (s, e) => {
       try {
@@ -726,6 +737,16 @@ class SpeechService extends EventEmitter {
     this.pendingFinal = false;
     this.manualStopRequested = false;
     this._resetVadState();
+
+    // Decide the capture path up front so the renderer knows whether to open
+    // the microphone or system-audio (loopback) stream when it receives the
+    // recording-started event. System audio always goes through the renderer
+    // because it relies on browser capture APIs. Windows/macOS use the renderer
+    // for the mic too; Linux uses the native recorder unless system audio is
+    // selected.
+    const systemSource = this._getAudioSource() === 'system';
+    this.useRendererCapture = systemSource || process.platform === 'win32' || process.platform === 'darwin';
+
     this.emit('recording-started');
     this.emit('status', this.provider === 'openrouter'
       ? 'OpenRouter Whisper recording started'
@@ -749,15 +770,8 @@ class SpeechService extends EventEmitter {
       });
     }
 
-    // Capture microphone audio in the renderer via the Web Audio API on Windows
-    // and macOS. Windows lacks the Unix sox/rec/arecord tools node-record-lpcm16
-    // needs; macOS would otherwise require a Homebrew `sox` install (not bundled)
-    // and a child-process mic that the system TCC prompt can't attribute. The
-    // renderer path uses getUserMedia, which macOS prompts for cleanly via the
-    // app's NSMicrophoneUsageDescription. Linux keeps the native recorder path.
-    this.useRendererCapture = process.platform === 'win32' || process.platform === 'darwin';
     if (this.useRendererCapture) {
-      this.emit('status', 'Waiting for microphone audio…');
+      this.emit('status', systemSource ? 'Waiting for system audio…' : 'Waiting for microphone audio…');
       // The renderer starts sending chunks once it receives the recording-started event.
       if (!this._isManualCaptureMode()) {
         this._startSegmentWatchdog();
@@ -831,10 +845,22 @@ class SpeechService extends EventEmitter {
    * the current Whisper segment buffer.
    */
   handleAudioChunkFromRenderer(chunk) {
-    if (!this.isRecording || !this._isBufferedProvider() || !this.useRendererCapture) {
+    if (!this.isRecording || !chunk || !chunk.length) {
       return;
     }
-    if (!chunk || !chunk.length) {
+    // Azure takes raw PCM straight into its push stream (used when system
+    // audio is captured in the renderer).
+    if (this.provider === 'azure') {
+      if (this.useRendererCapture && this.pushStream) {
+        try {
+          this.pushStream.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        } catch (error) {
+          logger.error('Error writing renderer audio to Azure push stream', { error: error.message });
+        }
+      }
+      return;
+    }
+    if (!this._isBufferedProvider() || !this.useRendererCapture) {
       return;
     }
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -1246,7 +1272,9 @@ class SpeechService extends EventEmitter {
         whisperDevice: this._getWhisperDevice(),
         whisperSegmentMs: String(this._getWhisperSegmentMs()),
         openRouterSttModel: this._getOpenRouterModel(),
-        openRouterSttLanguage: this._getOpenRouterLanguage()
+        openRouterSttLanguage: this._getOpenRouterLanguage(),
+        audioSource: this._getAudioSource(),
+        audioDeviceId: this._getAudioDeviceId()
       },
       config: {
         azure: config.get('speech.azure') || {},
@@ -1290,7 +1318,7 @@ class SpeechService extends EventEmitter {
   }
 
   updateSettings(settings = {}) {
-    const speechKeys = ['speechProvider', 'azureKey', 'azureRegion', 'whisperCommand', 'whisperModelDir', 'whisperModel', 'whisperLanguage', 'whisperCaptureMode', 'whisperDevice', 'whisperSegmentMs', 'openRouterKey', 'openRouterSttModel', 'openRouterSttLanguage'];
+    const speechKeys = ['speechProvider', 'azureKey', 'azureRegion', 'whisperCommand', 'whisperModelDir', 'whisperModel', 'whisperLanguage', 'whisperCaptureMode', 'whisperDevice', 'whisperSegmentMs', 'openRouterKey', 'openRouterSttModel', 'openRouterSttLanguage', 'audioSource', 'audioDeviceId'];
     let changed = false;
 
     for (const key of speechKeys) {
@@ -1329,7 +1357,13 @@ class SpeechService extends EventEmitter {
       return 'openrouter';
     }
 
-    return 'whisper';
+    // Honor an existing local Whisper setup when no explicit provider is set.
+    if (hasWhisper) {
+      return 'whisper';
+    }
+
+    // Nothing configured yet — OpenRouter Whisper is the product default.
+    return 'openrouter';
   }
 
   _getOpenRouterModel() {
@@ -1338,6 +1372,29 @@ class SpeechService extends EventEmitter {
 
   _getOpenRouterLanguage() {
     return this._getSetting('openRouterSttLanguage') || process.env.OPENROUTER_STT_LANGUAGE || config.get('speech.openrouter.language') || this._getWhisperLanguage();
+  }
+
+  _getAudioSource() {
+    const raw = String(
+      this._getSetting('audioSource') || process.env.SPEECH_AUDIO_SOURCE || config.get('speech.audioSource') || 'microphone'
+    ).trim().toLowerCase();
+    return raw === 'system' ? 'system' : 'microphone';
+  }
+
+  _getAudioDeviceId() {
+    return String(this._getSetting('audioDeviceId') || process.env.SPEECH_AUDIO_DEVICE_ID || config.get('speech.audioDeviceId') || '').trim();
+  }
+
+  /**
+   * Snapshot of the capture configuration so the main process can tell the
+   * renderer whether to open the microphone or system-audio (loopback) stream.
+   */
+  getCaptureConfig() {
+    return {
+      audioSource: this._getAudioSource(),
+      audioDeviceId: this._getAudioDeviceId(),
+      useRendererCapture: !!this.useRendererCapture
+    };
   }
 
   _getWhisperModel() {

@@ -18,6 +18,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const whisperSegmentMsInput = document.getElementById('whisperSegmentMs');
     const openrouterSttModelInput = document.getElementById('openrouterSttModel');
     const openrouterSttLanguageInput = document.getElementById('openrouterSttLanguage');
+    const audioSourceSelect = document.getElementById('audioSource');
+    const audioDeviceSelect = document.getElementById('audioDevice');
+    const refreshAudioDevicesBtn = document.getElementById('refreshAudioDevices');
     const llmProviderSelect = document.getElementById('llmProvider');
     const geminiKeyInput = document.getElementById('geminiKey');
     const openrouterKeyInput = document.getElementById('openrouterKey');
@@ -94,6 +97,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (whisperSegmentMsInput) whisperSegmentMsInput.value = settings.whisperSegmentMs || '';
         if (openrouterSttModelInput) openrouterSttModelInput.value = settings.openrouterSttModel || '';
         if (openrouterSttLanguageInput) openrouterSttLanguageInput.value = settings.openrouterSttLanguage || '';
+        if (audioSourceSelect) audioSourceSelect.value = settings.speechAudioSource || 'microphone';
+        desiredAudioDeviceId = settings.speechAudioDeviceId || '';
         if (llmProviderSelect) llmProviderSelect.value = settings.llmProvider || 'gemini';
         if (geminiKeyInput) geminiKeyInput.value = settings.geminiKey || '';
         if (openrouterKeyInput) openrouterKeyInput.value = settings.openrouterKey || '';
@@ -122,6 +127,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         updateSpeechFieldStates();
         updateLlmFieldStates();
+        updateAudioFieldStates();
     };
 
     // Load settings when window opens
@@ -159,6 +165,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (whisperSegmentMsInput) settings.whisperSegmentMs = whisperSegmentMsInput.value;
         if (openrouterSttModelInput) settings.openrouterSttModel = openrouterSttModelInput.value;
         if (openrouterSttLanguageInput) settings.openrouterSttLanguage = openrouterSttLanguageInput.value;
+        if (audioSourceSelect) settings.speechAudioSource = audioSourceSelect.value;
+        if (audioDeviceSelect) settings.speechAudioDeviceId = audioDeviceSelect.value;
         if (llmProviderSelect) settings.llmProvider = llmProviderSelect.value;
         if (geminiKeyInput) settings.geminiKey = geminiKeyInput.value;
         if (openrouterKeyInput) settings.openrouterKey = openrouterKeyInput.value;
@@ -171,7 +179,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const updateSpeechFieldStates = () => {
-        const provider = speechProviderSelect ? speechProviderSelect.value : 'azure';
+        const provider = speechProviderSelect ? speechProviderSelect.value : 'openrouter';
 
         // Show/hide provider-specific field groups instead of just disabling
         // them. This keeps the settings UI clean — only the relevant fields
@@ -221,6 +229,47 @@ document.addEventListener('DOMContentLoaded', () => {
         [openrouterKeyInput, openrouterModelInput].forEach(input => { if (input) input.disabled = provider !== 'openrouter'; });
     };
 
+    // ── Audio source + device picker ──────────────────────────────────
+    let desiredAudioDeviceId = '';
+
+    const populateAudioDevices = async (selectedId) => {
+        if (!audioDeviceSelect) return;
+        if (typeof selectedId === 'string') desiredAudioDeviceId = selectedId;
+        try {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const inputs = devices.filter((d) => d.kind === 'audioinput');
+            const current = desiredAudioDeviceId || (audioDeviceSelect.value || '');
+            audioDeviceSelect.innerHTML = '';
+            const def = document.createElement('option');
+            def.value = '';
+            def.textContent = 'System default';
+            audioDeviceSelect.appendChild(def);
+            inputs.forEach((device, index) => {
+                const option = document.createElement('option');
+                option.value = device.deviceId;
+                option.textContent = device.label || `Audio input ${index + 1}`;
+                audioDeviceSelect.appendChild(option);
+            });
+            if (current && Array.from(audioDeviceSelect.options).some((o) => o.value === current)) {
+                audioDeviceSelect.value = current;
+            }
+        } catch (error) {
+            console.warn('Failed to enumerate audio devices:', error);
+        }
+    };
+
+    const updateAudioFieldStates = () => {
+        const source = audioSourceSelect ? audioSourceSelect.value : 'microphone';
+        const group = document.getElementById('audioDeviceGroup');
+        if (group) group.style.display = source === 'system' ? '' : 'none';
+        if (audioSourceSelect) audioSourceSelect.disabled = false;
+        if (audioDeviceSelect) audioDeviceSelect.disabled = source !== 'system';
+        if (source === 'system') {
+            populateAudioDevices(desiredAudioDeviceId);
+        }
+    };
+
     // Add event listeners for all inputs
     const inputs = [
         azureKeyInput,
@@ -234,6 +283,7 @@ document.addEventListener('DOMContentLoaded', () => {
         whisperSegmentMsInput,
         openrouterSttModelInput,
         openrouterSttLanguageInput,
+        audioDeviceSelect,
         geminiKeyInput,
         openrouterKeyInput,
         openrouterModelInput,
@@ -258,6 +308,19 @@ document.addEventListener('DOMContentLoaded', () => {
         llmProviderSelect.addEventListener('change', () => {
             updateLlmFieldStates();
             saveSettings();
+        });
+    }
+
+    if (audioSourceSelect) {
+        audioSourceSelect.addEventListener('change', () => {
+            updateAudioFieldStates();
+            saveSettings();
+        });
+    }
+
+    if (refreshAudioDevicesBtn) {
+        refreshAudioDevicesBtn.addEventListener('click', () => {
+            populateAudioDevices(audioDeviceSelect ? audioDeviceSelect.value : '');
         });
     }
 
@@ -286,6 +349,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     updateSpeechFieldStates();
     updateLlmFieldStates();
+    updateAudioFieldStates();
 
     // Initialize icon grid with correct paths
     const initializeIconGrid = () => {

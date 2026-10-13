@@ -10,7 +10,7 @@ class MainWindowUI {
     constructor() {
         this.isInteractive = false;
         this.isHidden = false;
-        this.currentSkill = 'dsa'; // Default, will be updated from settings
+        this.currentSkill = 'interview'; // Default, will be updated from settings
         this.statusDot = null;
         this.skillIndicator = null;
         this.micButton = null;
@@ -25,7 +25,7 @@ class MainWindowUI {
         
         // Define available skills for navigation
         this.availableSkills = [
-            'dsa'
+            'interview'
         ];
         
         this.init();
@@ -288,10 +288,10 @@ class MainWindowUI {
             }
         });
 
-        // Skill indicator click handler toggles DSA skill
+        // Skill indicator click handler toggles the active skill
         this.skillIndicator.addEventListener('click', () => {
             if (!this.isInteractive) return;
-            const newSkill = 'dsa';
+            const newSkill = 'interview';
             if (window.electronAPI && window.electronAPI.updateActiveSkill) {
                 window.electronAPI.updateActiveSkill(newSkill).then(() => {
                     this.handleSkillActivated(newSkill);
@@ -425,8 +425,8 @@ class MainWindowUI {
                 this.handleInteractionModeChanged(interactive);
             });
 
-            window.electronAPI.onRecordingStarted(() => {
-                this.handleRecordingStarted();
+            window.electronAPI.onRecordingStarted((event, payload) => {
+                this.handleRecordingStarted(payload);
             });
 
             window.electronAPI.onRecordingStopped(() => {
@@ -519,6 +519,7 @@ class MainWindowUI {
     handleLLMResponse(data) {
         const skill = data.skill || data.metadata?.skill || 'General';
         const skillNames = {
+            'interview': 'Interview',
             'dsa': 'DSA',
             'behavioral': 'Behavioral', 
             'sales': 'Sales',
@@ -641,25 +642,30 @@ class MainWindowUI {
         logger.debug('Screenshot request received', { component: 'MainWindowUI' });
     }
 
-    handleRecordingStarted() {
+    handleRecordingStarted(payload) {
         this.isRecording = true;
         if (this.micButton) {
             this.micButton.classList.add('recording');
         }
-        // On Windows and macOS, Whisper audio is captured here in the renderer
-        // (Web Audio API) rather than the main process: Windows lacks sox/rec/
-        // arecord, and macOS avoids an unbundled Homebrew `sox`. Must match the
-        // main process's useRendererCapture gate (speech.service.js). Linux uses
-        // the native recorder. navigator.userAgentData is preferred when present
-        // since navigator.platform is deprecated.
-        const platform = (typeof navigator !== 'undefined' &&
-          ((navigator.userAgentData && navigator.userAgentData.platform) ||
-            navigator.platform || '')).toLowerCase();
-        const useRendererCapture = platform.includes('win') || platform.includes('mac');
-        if (useRendererCapture) {
-            this._startRendererAudioCapture();
+        // The main process decides the capture path (see speech.service.js
+        // getCaptureConfig) and sends it with recording-started. When it asks
+        // for renderer capture, open either the microphone or the system-audio
+        // (loopback) stream. The PCM pipeline into sendAudioChunk is identical
+        // downstream.
+        const config = payload || {};
+        this._captureConfig = config;
+        if (config.useRendererCapture) {
+            if ((config.audioSource || 'microphone') === 'system') {
+                this._startSystemAudioCapture(config.audioDeviceId || '');
+            } else {
+                this._startRendererAudioCapture(config.audioDeviceId || '');
+            }
         }
-        logger.debug('Recording started', { component: 'MainWindowUI' });
+        logger.debug('Recording started', {
+            component: 'MainWindowUI',
+            audioSource: config.audioSource || 'microphone',
+            useRendererCapture: !!config.useRendererCapture
+        });
     }
 
     handleRecordingStopped() {
@@ -671,52 +677,37 @@ class MainWindowUI {
         logger.debug('Recording stopped', { component: 'MainWindowUI' });
     }
 
+    /** True on Windows, where system audio can be captured natively (loopback). */
+    _platformIsWindows() {
+        const platform = (typeof navigator !== 'undefined' &&
+          ((navigator.userAgentData && navigator.userAgentData.platform) ||
+            navigator.platform || '')).toLowerCase();
+        return platform.includes('win');
+    }
+
     /**
      * Capture microphone audio in the renderer using the Web Audio API.
-     * This is used for Whisper on Windows where node-record-lpcm16's sox/rec
-     * dependencies are unavailable.
+     * Used for Whisper/OpenRouter STT on Windows and macOS, and whenever an
+     * explicit device id is supplied.
      */
-    async _startRendererAudioCapture() {
+    async _startRendererAudioCapture(deviceId) {
         try {
             this._stopRendererAudioCapture();
 
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    sampleRate: { ideal: 16000 }
-                }
-            });
-            this._mediaStream = stream;
-
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 16000
-            });
-            this._audioContext = audioContext;
-
-            const source = audioContext.createMediaStreamSource(stream);
-            const bufferSize = 4096;
-            const scriptNode = audioContext.createScriptProcessor(bufferSize, 1, 1);
-            this._scriptNode = scriptNode;
-
-            scriptNode.onaudioprocess = (event) => {
-                if (!this.isRecording || !window.electronAPI || !window.electronAPI.sendAudioChunk) {
-                    return;
-                }
-                const inputData = event.inputBuffer.getChannelData(0);
-                const pcm16 = new Int16Array(inputData.length);
-                for (let i = 0; i < inputData.length; i++) {
-                    const s = Math.max(-1, Math.min(1, inputData[i]));
-                    pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-                }
-                window.electronAPI.sendAudioChunk(pcm16.buffer);
+            const audioConstraints = {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                sampleRate: { ideal: 16000 }
             };
+            if (deviceId) {
+                audioConstraints.deviceId = { exact: deviceId };
+            }
 
-            source.connect(scriptNode);
-            scriptNode.connect(audioContext.destination);
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+            this._wireCaptureStream(stream);
 
-            logger.info('Renderer audio capture started', { component: 'MainWindowUI' });
+            logger.info('Renderer microphone capture started', { component: 'MainWindowUI', deviceId: deviceId || 'default' });
         } catch (error) {
             logger.error('Failed to start renderer audio capture', {
                 component: 'MainWindowUI',
@@ -727,6 +718,104 @@ class MainWindowUI {
                 await window.electronAPI.stopSpeechRecognition();
             } catch (_) { /* ignore */ }
         }
+    }
+
+    /**
+     * Capture system audio (the speaker/output mix). On Windows this uses
+     * Chromium's desktop loopback; elsewhere it requires a loopback input device
+     * such as BlackHole (macOS) or a PulseAudio monitor (Linux), chosen in
+     * Settings.
+     */
+    async _startSystemAudioCapture(deviceId) {
+        try {
+            this._stopRendererAudioCapture();
+
+            let stream;
+            if (deviceId) {
+                // Explicit loopback/virtual device chosen by the user.
+                stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        deviceId: { exact: deviceId },
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false,
+                        sampleRate: { ideal: 16000 }
+                    }
+                });
+            } else if (this._platformIsWindows() && window.electronAPI && window.electronAPI.getDesktopSources) {
+                const sources = await window.electronAPI.getDesktopSources();
+                const source = Array.isArray(sources) && sources.length ? sources[0] : null;
+                if (!source) {
+                    throw new Error('No desktop audio source available for loopback capture');
+                }
+                stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        mandatory: {
+                            chromeMediaSource: 'desktop',
+                            chromeMediaSourceId: source.id
+                        }
+                    },
+                    video: {
+                        mandatory: {
+                            chromeMediaSource: 'desktop',
+                            chromeMediaSourceId: source.id
+                        }
+                    }
+                });
+                // We only want the audio; drop the video track Chromium attaches.
+                stream.getVideoTracks().forEach((track) => track.stop());
+            } else {
+                throw new Error('System audio needs a loopback device (e.g. BlackHole) selected in Settings.');
+            }
+
+            this._wireCaptureStream(stream);
+            logger.info('Renderer system-audio capture started', {
+                component: 'MainWindowUI',
+                deviceId: deviceId || 'native-loopback'
+            });
+        } catch (error) {
+            logger.error('Failed to start system-audio capture', {
+                component: 'MainWindowUI',
+                error: error.message
+            });
+            try {
+                await window.electronAPI.stopSpeechRecognition();
+            } catch (_) { /* ignore */ }
+        }
+    }
+
+    /**
+     * Wire a MediaStream through the Web Audio API and forward 16 kHz mono
+     * 16-bit PCM chunks to the main process. Shared by mic and system capture.
+     */
+    _wireCaptureStream(stream) {
+        this._mediaStream = stream;
+
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)({
+            sampleRate: 16000
+        });
+        this._audioContext = audioContext;
+
+        const source = audioContext.createMediaStreamSource(stream);
+        const bufferSize = 4096;
+        const scriptNode = audioContext.createScriptProcessor(bufferSize, 1, 1);
+        this._scriptNode = scriptNode;
+
+        scriptNode.onaudioprocess = (event) => {
+            if (!this.isRecording || !window.electronAPI || !window.electronAPI.sendAudioChunk) {
+                return;
+            }
+            const inputData = event.inputBuffer.getChannelData(0);
+            const pcm16 = new Int16Array(inputData.length);
+            for (let i = 0; i < inputData.length; i++) {
+                const s = Math.max(-1, Math.min(1, inputData[i]));
+                pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
+            window.electronAPI.sendAudioChunk(pcm16.buffer);
+        };
+
+        source.connect(scriptNode);
+        scriptNode.connect(audioContext.destination);
     }
 
     _stopRendererAudioCapture() {
@@ -758,6 +847,7 @@ class MainWindowUI {
 
     updateSkillIndicator() {
         const skillNames = {
+            'interview': 'Interview',
             'dsa': 'DSA',
             'behavioral': 'Behavioral', 
             'sales': 'Sales',
@@ -871,6 +961,7 @@ class MainWindowUI {
 
     showSkillChangeNotification(skill, direction) {
         const skillNames = {
+            'interview': 'Interview',
             'dsa': 'DSA',
             'behavioral': 'Behavioral', 
             'sales': 'Sales',

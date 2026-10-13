@@ -33,6 +33,8 @@ It is free and open source. Processing stays on your machine, and the only thing
 ## Highlights
 
 - **Invisible overlay.** Windows stay out of Zoom, Google Meet, Microsoft Teams, Discord, and OBS captures. You see the answer, the call does not.
+- **Any interview, not just DSA.** One universal copilot handles behavioral, coding, system design, product, data, and general questions, and shapes each answer for reading live.
+- **Listen to the conversation.** Capture your microphone or the speaker/system audio (the interviewer's voice), and print answers on the overlay.
 - **Hidden during screen share.** When a share starts, the app can hide every window on its own.
 - **Flexible local voice.** Choose manual start/stop capture or automatic voice-activity detection without fixed-timer sentence cuts.
 - **Configurable streamed answers.** Route voice replies to chat, the floating overlay, or both.
@@ -114,8 +116,15 @@ LLM_PROVIDER=gemini
 # OPENROUTER_API_KEY=your_openrouter_key_here
 # OPENROUTER_MODEL=deepseek/deepseek-v4.1-flash
 
-# Optional speech provider. Pick one.
-SPEECH_PROVIDER=whisper
+# Speech provider: openrouter (cloud, default), azure, or whisper (local).
+# OpenRouter reuses OPENROUTER_API_KEY and needs no local install.
+SPEECH_PROVIDER=openrouter
+
+# Audio source: microphone (default) or system (the speaker/output loopback)
+# "system" listens to the interviewer's voice. Windows captures it
+# automatically; macOS/Linux need a loopback device (BlackHole / monitor).
+SPEECH_AUDIO_SOURCE=microphone
+# SPEECH_AUDIO_DEVICE_ID=
 
 # Azure option
 AZURE_SPEECH_KEY=your_azure_speech_key
@@ -142,13 +151,17 @@ Speech is optional. If no provider is configured, the microphone button hides it
 
 ## Optional voice setup
 
-You can use local Whisper for offline transcription, Azure Speech, or OpenRouter (OpenAI Whisper in the cloud).
+You can use OpenRouter (OpenAI Whisper in the cloud) — the default — or local Whisper for offline transcription, or Azure Speech. By default the app listens to your microphone; switch the audio source to **System** in Settings to listen to the speaker/output (the interviewer's voice) instead.
 
-For local Whisper, `./setup.sh` handles the full setup. It creates `.venv-whisper`, installs `openai-whisper`, points `.env` at the virtual environment, creates `.whisper-models`, and runs a quick speech test. The app reads its own PCM WAV recordings directly; ffmpeg is only needed when transcribing other audio formats through the CLI fallback.
+- **Windows** captures system audio automatically (loopback).
+- **macOS** needs a virtual loopback device (for example [BlackHole](https://existential.audio/blackhole/)); pick it in Settings → Audio Device.
+- **Linux** works with a PulseAudio monitor source (a `Monitor of …` device).
+
+For OpenRouter speech-to-text (the default), add your `OPENROUTER_API_KEY` and keep `SPEECH_PROVIDER=openrouter`. Audio is sent to OpenRouter's `/audio/transcriptions` endpoint using an OpenAI Whisper model (`openai/whisper-large-v3` by default). No local install is needed.
 
 For Azure Speech, create a Speech resource in the [Azure Portal](https://portal.azure.com/), then add the key and region to `.env` with `SPEECH_PROVIDER=azure`.
 
-For OpenRouter speech-to-text, add your `OPENROUTER_API_KEY` and set `SPEECH_PROVIDER=openrouter`. Audio is sent to OpenRouter's `/audio/transcriptions` endpoint using an OpenAI Whisper model (`openai/whisper-large-v3` by default).
+For local Whisper (offline, opt-in), `./setup.sh` handles the full setup. It creates `.venv-whisper`, installs `openai-whisper`, points `.env` at the virtual environment, creates `.whisper-models`, and runs a quick speech test. Set `SPEECH_PROVIDER=whisper` to use it. The app reads its own PCM WAV recordings directly; ffmpeg is only needed when transcribing other audio formats through the CLI fallback.
 
 ## How it works
 
@@ -183,7 +196,9 @@ OpenCluely is under active development. The core is stable and improvements ship
 - AI response window with markdown and syntax highlighting
 - Global shortcuts for capture, visibility, interaction, chat, and settings
 - Session memory and a full chat UI
-- Language picker and a DSA skill prompt
+- Language picker, applied to coding questions
+- Universal interview copilot prompt (behavioral, coding, system design, product, general)
+- Microphone or system-audio (speaker/loopback) capture
 - Selectable AI backend: Gemini or OpenRouter
 - Optional Azure Speech, local Whisper, or OpenRouter cloud transcription, with an auto hiding mic button
 - Multi-monitor and area capture support
